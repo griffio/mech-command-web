@@ -20,6 +20,9 @@ import { World } from './app/world';
 
 /** The dreadnought game's pixel budget: a Retina iPad canvas is about 5.6 MP, more than the sea needs. */
 const MAX_PIXELS = 3_600_000;
+/** Camera distances (metres from what it looks at) over which the sun's shadows fade out. */
+const SHADOW_FADE_START_M = 700;
+const SHADOW_FADE_END_M = 1000;
 
 const status = document.getElementById('status')!;
 const selection = document.getElementById('selection')!;
@@ -167,9 +170,14 @@ async function main() {
     controls.update();
     camera.update(canvas.clientWidth / Math.max(canvas.clientHeight, 1));
     world.update(dt, !survey.running);
-    // The shadow map covers what the camera looks at, growing in 25% steps as it zooms out (so it doesn't shimmer).
-    const reach = Math.min(Math.max(controls.distance * 1.1, 120), 1300);
-    sea.shadowFocus = { x: controls.target[0], z: controls.target[2], half: 1.25 ** Math.ceil(Math.log(reach) / Math.log(1.25)) };
+    // The shadow map covers what the camera looks at, growing in 25% steps as it zooms out (so it doesn't shimmer). The
+    // shadows fade out between 700 and 1000 m: from further off a tree's shadow is a pixel or two, and the map's own
+    // shadows are baked into its colour map anyway. Past the fade there is no shadow pass at all.
+    const reach = Math.min(Math.max(controls.distance * 1.1, 120), 1100);
+    const fade = Math.min(Math.max((controls.distance - SHADOW_FADE_START_M) / (SHADOW_FADE_END_M - SHADOW_FADE_START_M), 0), 1);
+    const strength = 1 - fade * fade * (3 - 2 * fade);
+    sea.shadowFocus =
+      strength > 0 ? { x: controls.target[0], z: controls.target[2], half: 1.25 ** Math.ceil(Math.log(reach) / Math.log(1.25)), strength } : null;
     // Normally one frame per refresh; the survey renders several to saturate the GPU and expose real cost.
     const repeats = survey.repeats;
     const encodeStart = performance.now();

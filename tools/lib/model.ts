@@ -51,6 +51,15 @@ export interface TextureImage {
   data: Uint8Array;
   mimeType: 'image/png' | 'image/webp';
   hasAlpha: boolean;
+  /** Which texels are see-through (alpha below the cut-out threshold), when there are any. */
+  alpha: AlphaMask | null;
+}
+
+export interface AlphaMask {
+  width: number;
+  height: number;
+  /** 1 where the texel is cut away. */
+  clear: Uint8Array;
 }
 
 export interface TextureOptions {
@@ -94,16 +103,22 @@ export class TextureLibrary {
       return null;
     }
     const img = decodeTga(upRel ? up!.read(upRel) : this.src.read(rel!));
+    let alpha: AlphaMask | null = null;
+    if (img.hasAlpha) {
+      const clear = new Uint8Array(img.width * img.height);
+      for (let i = 0; i < clear.length; i++) clear[i] = img.data[i * 4 + 3]! < 128 ? 1 : 0;
+      alpha = { width: img.width, height: img.height, clear };
+    }
     let pipeline = sharp(Buffer.from(img.data), { raw: { width: img.width, height: img.height, channels: 4 } });
     const maxSize = this.options.maxSize ?? Infinity;
     if (Math.max(img.width, img.height) > maxSize) pipeline = pipeline.resize(maxSize, maxSize, { fit: 'inside', kernel: 'lanczos3' });
     if (upRel) {
       this.upscaledCount++;
       const webp = await pipeline.webp({ quality: 90, alphaQuality: 100 }).toBuffer();
-      return { data: new Uint8Array(webp), mimeType: 'image/webp', hasAlpha: img.hasAlpha };
+      return { data: new Uint8Array(webp), mimeType: 'image/webp', hasAlpha: img.hasAlpha, alpha };
     }
     const png = await pipeline.png({ compressionLevel: 9 }).toBuffer();
-    return { data: new Uint8Array(png), mimeType: 'image/png', hasAlpha: img.hasAlpha };
+    return { data: new Uint8Array(png), mimeType: 'image/png', hasAlpha: img.hasAlpha, alpha };
   }
 }
 
@@ -124,6 +139,8 @@ export interface ModelInput {
 
 export interface ModelStats {
   triangles: number;
+  /** Triangles that show see-through texels, drawn with the cut-out material. */
+  cutoutTriangles: number;
   vertices: number;
   nodes: number;
   clips: number;
@@ -135,24 +152,40 @@ export async function buildModel(input: ModelInput, textures: TextureLibrary): P
   const scene = doc.createScene(input.name);
   const root = doc.createNode(input.name);
   scene.addChild(root);
-  const stats: ModelStats = { triangles: 0, vertices: 0, nodes: 0, clips: 0 };
+  const stats: ModelStats = { triangles: 0, cutoutTriangles: 0, vertices: 0, nodes: 0, clips: 0 };
 
   const slots = input.base.textures;
-  const materials: Material[] = [];
+  // Per texture slot: a solid material, and for textures with see-through texels a cut-out one too. Faces only use the
+  // cut-out material where they actually show see-through texels: a tile-based GPU loses its hidden-surface removal
+  // for every pixel drawn with a shader that can discard, so the rest of a building stays solid.
+  const materials: { solid: Material; cutout: Material | null; alpha: AlphaMask | null }[] = [];
   for (let i = 0; i < Math.max(slots.length, 1); i++) {
     const image = slots[i] ? await textures.get(slots[i]) : null;
-    const mat = doc.createMaterial(slots[i] || 'untextured').setMetallicFactor(0).setRoughnessFactor(1);
+    const name = slots[i] || 'untextured';
+    const solid = doc.createMaterial(name).setMetallicFactor(0).setRoughnessFactor(1);
+    let cutout: Material | null = null;
     if (image) {
       const tex = doc.createTexture(slots[i]).setImage(image.data).setMimeType(image.mimeType);
       if (image.mimeType === 'image/webp' && !doc.getRoot().listExtensionsUsed().length) {
         doc.createExtension(EXTTextureWebP).setRequired(true);
       }
-      mat.setBaseColorTexture(tex);
-      if (image.hasAlpha) mat.setAlphaMode('MASK').setAlphaCutoff(0.5).setDoubleSided(true);
+      solid.setBaseColorTexture(tex);
+      if (image.hasAlpha) {
+        // Seen from behind as before, but drawn by the solid pipeline.
+        solid.setDoubleSided(true);
+        cutout = doc
+          .createMaterial(`${name} (cut-out)`)
+          .setMetallicFactor(0)
+          .setRoughnessFactor(1)
+          .setBaseColorTexture(tex)
+          .setAlphaMode('MASK')
+          .setAlphaCutoff(0.5)
+          .setDoubleSided(true);
+      }
     } else {
-      mat.setBaseColorFactor([0.6, 0.6, 0.6, 1]);
+      solid.setBaseColorFactor([0.6, 0.6, 0.6, 1]);
     }
-    materials.push(mat);
+    materials.push({ solid, cutout, alpha: image?.alpha ?? null });
   }
 
   const drawable = (o: AseObject) => o.mesh && o.mesh.faces.length > 0 && !/^spotlight/i.test(o.name);
@@ -160,16 +193,20 @@ export async function buildModel(input: ModelInput, textures: TextureLibrary): P
   const parentOf = (o: AseObject) => (o.parent && byName.has(o.parent) && o.parent !== o.name ? byName.get(o.parent)! : null);
 
   const makeMesh = (objects: AseObject[], origin: (o: AseObject) => Vec3) => {
-    // One primitive per texture slot; vertices are split per (position, uv) pair.
+    // One primitive per texture slot (and per solid or cut-out); vertices are split per (position, uv) pair.
     const groups = new Map<number, { pos: number[]; nrm: number[]; uv: number[]; idx: number[]; seen: Map<string, number> }>();
     for (const o of objects) {
       const mesh = o.mesh!;
       const center = origin(o);
       const normals = mesh.normals ?? computeNormals(mesh.positions, mesh.faces.map((f) => f.v));
       for (const face of mesh.faces) {
-        const slot = faceTextureSlot(face, slots.length);
-        let g = groups.get(slot);
-        if (!g) groups.set(slot, (g = { pos: [], nrm: [], uv: [], idx: [], seen: new Map() }));
+        const slot = Math.min(faceTextureSlot(face, slots.length), materials.length - 1);
+        const alpha = materials[slot]!.alpha;
+        const cut = alpha !== null && face.t !== null && showsClearTexels(face.t.map((ti) => mesh.tverts[ti] ?? [0, 0]), alpha);
+        const key = slot * 2 + (cut ? 1 : 0);
+        let g = groups.get(key);
+        if (!g) groups.set(key, (g = { pos: [], nrm: [], uv: [], idx: [], seen: new Map() }));
+        if (cut) stats.cutoutTriangles++;
         for (let k = 0; k < 3; k++) {
           const pi = face.v[k];
           const ti = face.t ? face.t[k] : -1;
@@ -190,7 +227,8 @@ export async function buildModel(input: ModelInput, textures: TextureLibrary): P
     }
     if (!groups.size) return null;
     const gMesh = doc.createMesh();
-    for (const [slot, g] of groups) {
+    for (const [key, g] of groups) {
+      const m = materials[key >> 1]!;
       const vertexCount = g.pos.length / 3;
       stats.vertices += vertexCount;
       const accessor = (type: 'VEC3' | 'VEC2' | 'SCALAR', array: Float32Array<ArrayBuffer> | Uint16Array<ArrayBuffer> | Uint32Array<ArrayBuffer>) =>
@@ -202,7 +240,7 @@ export async function buildModel(input: ModelInput, textures: TextureLibrary): P
           .setAttribute('NORMAL', accessor('VEC3', new Float32Array(g.nrm)))
           .setAttribute('TEXCOORD_0', accessor('VEC2', new Float32Array(g.uv)))
           .setIndices(accessor('SCALAR', vertexCount > 65535 ? new Uint32Array(g.idx) : new Uint16Array(g.idx)))
-          .setMaterial(materials[Math.min(slot, materials.length - 1)]),
+          .setMaterial(key & 1 ? m.cutout! : m.solid),
       );
     }
     return gMesh;
@@ -306,6 +344,50 @@ function addClip(
       channel(node, 'rotation', values);
     }
   }
+}
+
+/**
+ * Does a face show any see-through texel? Its UV triangle is rasterised over the texture, with a margin of a texel and a
+ * half because bilinear filtering reaches the neighbours of the texels at its edges. UVs wrap, as the sampler does.
+ */
+function showsClearTexels(tverts: [number, number][], alpha: AlphaMask): boolean {
+  const { width: W, height: H, clear } = alpha;
+  // Texel space with v flipped as the glTF UVs are (row 0 at the top of the picture).
+  const p = tverts.map(([u, v]) => [u * W, (1 - v) * H] as [number, number]);
+  const [a, b, c] = p as [[number, number], [number, number], [number, number]];
+  const area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+  const edges: [[number, number], [number, number]][] = [
+    [b, c],
+    [c, a],
+    [a, b],
+  ];
+  const minX = Math.floor(Math.min(a[0], b[0], c[0]) - 1.5);
+  const maxX = Math.ceil(Math.max(a[0], b[0], c[0]) + 1.5);
+  const minY = Math.floor(Math.min(a[1], b[1], c[1]) - 1.5);
+  const maxY = Math.ceil(Math.max(a[1], b[1], c[1]) + 1.5);
+  // A degenerate (zero-area) UV triangle samples along its edges only; treat it like any other with the margin.
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const px = x + 0.5;
+      const py = y + 0.5;
+      let inside = true;
+      let nearEdge = false;
+      for (const [e0, e1] of edges) {
+        const cross = (e1[0] - e0[0]) * (py - e0[1]) - (e1[1] - e0[1]) * (px - e0[0]);
+        const len = Math.hypot(e1[0] - e0[0], e1[1] - e0[1]) || 1;
+        if ((area >= 0 ? cross : -cross) < 0) inside = false;
+        if (Math.abs(cross) / len <= 1.5) {
+          // Close to the line through the edge: also check it is within the edge's extent.
+          const t = ((px - e0[0]) * (e1[0] - e0[0]) + (py - e0[1]) * (e1[1] - e0[1])) / (len * len);
+          if (t >= -1.5 / len && t <= 1 + 1.5 / len) nearEdge = true;
+        }
+      }
+      if (!inside && !nearEdge) continue;
+      const i = (((y % H) + H) % H) * W + (((x % W) + W) % W);
+      if (clear[i]) return true;
+    }
+  }
+  return false;
 }
 
 function computeNormals(positions: Vec3[], faces: Vec3[]): Vec3[] {

@@ -172,7 +172,8 @@ for (const spec of models.specs.values()) {
     mechMeta[spec.key] = { model: modelPath(spec), clips: clipMeta };
   }
   console.log(
-    `  ${modelPath(spec).padEnd(34)} ${String(stats.triangles).padStart(5)} tris  ${String(stats.clips).padStart(2)} clips  ${(glb.length / 1024).toFixed(0).padStart(5)} KB`,
+    `  ${modelPath(spec).padEnd(34)} ${String(stats.triangles).padStart(5)} tris (${String(stats.cutoutTriangles).padStart(4)} cut-out)  ` +
+      `${String(stats.clips).padStart(2)} clips  ${(glb.length / 1024).toFixed(0).padStart(5)} KB`,
   );
 }
 

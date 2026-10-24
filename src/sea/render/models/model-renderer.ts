@@ -44,6 +44,12 @@ export interface ModelOptions {
 const VERTEX_BYTES = 36;
 const MATERIAL_BYTES = 32;
 const INITIAL_MATRICES = 4096;
+/**
+ * Models drawn only with cut-out materials (trees, fences, nets) cast shadows only while the camera is within this
+ * many times their radius: further off their shadows are a few pixels, and each one drawn costs the shadow pass a
+ * discarding shader.
+ */
+const FOLIAGE_CASTER_RANGE = 45;
 
 interface Geometry {
   vertices: GPUBuffer;
@@ -83,6 +89,11 @@ export class GpuModel {
 
   get nodeCount(): number {
     return this.geometry.nodeCount;
+  }
+
+  /** Drawn only with cut-out materials: trees, fences, nets. */
+  get foliage(): boolean {
+    return this.materials.length > 0 && this.materials.every((m) => m.cutout);
   }
 
   /** Bounding radius in world metres. */
@@ -322,10 +333,18 @@ export class ModelRenderer {
       model.shadowFirst = slot;
       const show = model.nodeCount > 1 ? drawUnits : drawProps;
       if (shadowFocus && show) {
+        const foliage = model.foliage;
         for (const inst of model.instances) {
           if (!inst.visible) continue;
           const reach = shadowFocus.reach + inst.radius;
           if (Math.abs(inst.center[0] - shadowFocus.x) > reach || Math.abs(inst.center[2] - shadowFocus.z) > reach) continue;
+          if (foliage) {
+            const range = inst.radius * FOLIAGE_CASTER_RANGE;
+            const dx = inst.center[0] - cx;
+            const dy = inst.center[1] - cy;
+            const dz = inst.center[2] - cz;
+            if (dx * dx + dy * dy + dz * dz > range * range) continue;
+          }
           this.baseData[slot++] = inst.base;
         }
       }

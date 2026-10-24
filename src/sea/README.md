@@ -28,8 +28,10 @@ New:
 - `render/models/`: MC2's buildings, trees, mechs and vehicles. Every model is one vertex buffer whose
   vertices name the node they move with, and each instance's node matrices sit in one storage buffer, so all
   the mechs of a type are one instanced draw per material. Cut-out materials (leaves, fences) get their own
-  pipeline, because discarding pixels costs a tile-based GPU its hidden-surface removal. They cast into the sun's
-  shadow map, and the land, the sea and the models receive it.
+  pipeline, because discarding pixels costs a tile-based GPU its hidden-surface removal. The converter only gives a
+  face the cut-out material where its texture area actually shows see-through texels, so most of a building stays
+  solid. They cast into the sun's shadow map, and the land, the sea and the models receive it. The shadows fade out
+  as the camera zooms out (700 to 1000 m), and trees, fences and nets stop casting beyond 45 times their size.
 - `models/`: a reader for the converter's GLB files and an animator for their clips (no three.js on this page).
 - `app/world.ts`: the mission's placements, units walking as in the three.js viewer, tap picking, the
   selection ring. `app/mc2-map.ts`: MC2 heights in metres and a bilinear upsample. `app/orbit-controls.ts`:

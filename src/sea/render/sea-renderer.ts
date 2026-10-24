@@ -111,10 +111,10 @@ export class SeaRenderer {
   /** Pins the sea and clouds at one moment (screenshots, comparisons). */
   frozenTime: number | null = null;
   /**
-   * Where the sun's shadow map is centred (world x, z) and how far it reaches either side (metres); the app sets it each
-   * frame from what the camera looks at. Null: no shadows.
+   * Where the sun's shadow map is centred (world x, z), how far it reaches either side (metres), and how strong the
+   * shadows are (0..1, faded out as the camera zooms out); the app sets it each frame. Null: no shadows, no shadow pass.
    */
-  shadowFocus: { x: number; z: number; half: number } | null = null;
+  shadowFocus: { x: number; z: number; half: number; strength: number } | null = null;
   readonly debug: SeaDebugFlags = {
     skipProps: false,
     skipUnits: false,
@@ -311,13 +311,13 @@ export class SeaRenderer {
     // The sun's shadow, framed on what the camera looks at. The depth range covers the land's heights and whatever stands
     // on it across the box, seen slantwise along the sun.
     const focus = this.shadowFocus;
-    const shadowOn = focus !== null && !this.debug.skipShadows && sunDir[1] > 0.02;
+    const shadowOn = focus !== null && focus.strength > 0 && !this.debug.skipShadows && sunDir[1] > 0.02;
     if (shadowOn) {
       const depthHalf = focus.half * 1.2 + 100;
       sunShadowMatrix(sunDir, [focus.x, 0, focus.z], camera.position, focus.half, depthHalf, SHADOW_SIZE, this.shadowMatrix);
       s.mat4(SLOT.shadowViewProj, this.shadowMatrix);
       const texelWorld = (2 * focus.half) / SHADOW_SIZE;
-      s.vec4(SLOT.shadow, 1, 1 / SHADOW_SIZE, texelWorld * 2.5, 0.4 / (2 * depthHalf));
+      s.vec4(SLOT.shadow, Math.min(focus.strength, 1), 1 / SHADOW_SIZE, texelWorld * 2.5, 0.4 / (2 * depthHalf));
     } else {
       s.vec4(SLOT.shadow, 0, 1 / SHADOW_SIZE, 0, 0);
     }

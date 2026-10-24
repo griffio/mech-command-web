@@ -1,10 +1,11 @@
-// Sun shadow lookup (group 3): one orthographic depth map framed on the player ship. Requires scene.
+// Sun shadow lookup (group 3): one orthographic depth map framed on what the camera looks at. Requires scene.
+// scene.shadow.x is the shadows' strength: 0 off (no lookups at all), 1 full; in between they fade (the camera zooming out).
 @group(3) @binding(0) var shadow_map: texture_depth_2d;
 @group(3) @binding(1) var shadow_samp: sampler_comparison;
 
 // Shadow-map coordinates: xy = uv, z = biased depth, w = 1 when inside the map.
 fn shadow_coords(rel: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
-  if (scene.shadow.x < 0.5) {
+  if (scene.shadow.x <= 0.0) {
     return vec4<f32>(0.0);
   }
   let nl = saturate(dot(n, scene.sun_dir.xyz));
@@ -28,7 +29,7 @@ fn shadow_factor(rel: vec3<f32>, n: vec3<f32>) -> f32 {
       lit += textureSampleCompareLevel(shadow_map, shadow_samp, c.xy + vec2<f32>(f32(i), f32(j)) * t, c.z);
     }
   }
-  return lit / 9.0;
+  return mix(1.0, lit / 9.0, scene.shadow.x);
 }
 
 // Four bilinear-compare taps: the sea covers many more pixels than the ship, and water does not need crisp edges.
@@ -42,5 +43,5 @@ fn shadow_factor_fast(rel: vec3<f32>, n: vec3<f32>) -> f32 {
   lit += textureSampleCompareLevel(shadow_map, shadow_samp, c.xy + vec2<f32>(t, -t), c.z);
   lit += textureSampleCompareLevel(shadow_map, shadow_samp, c.xy + vec2<f32>(-t, t), c.z);
   lit += textureSampleCompareLevel(shadow_map, shadow_samp, c.xy + vec2<f32>(t, t), c.z);
-  return lit * 0.25;
+  return mix(1.0, lit * 0.25, scene.shadow.x);
 }
