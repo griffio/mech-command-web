@@ -69,8 +69,9 @@ export class SeaUnit {
     return this.info?.clips[this.running ? 'run' : 'walk']?.startVelocity ?? 10;
   }
 
-  update(dt: number, terrain: Terrain): void {
-    if (this.route.length && this.kind === 'mech') this.steer(dt);
+  /** `move` false keeps the unit where it is (still animating): the perf survey wants the same picture throughout. */
+  update(dt: number, terrain: Terrain, move = true): void {
+    if (move && this.route.length && this.kind === 'mech') this.steer(dt);
     this.animator?.update(dt);
     const y = terrain.heightAt(this.x, this.z);
     placement(this.frame, this.x, y, this.z, (this.rotation * Math.PI) / 180, this.scale);
@@ -184,8 +185,8 @@ export class World {
     this.selected = unit;
   }
 
-  update(dt: number): void {
-    for (const u of this.units) u.update(dt, this.terrain);
+  update(dt: number, move = true): void {
+    for (const u of this.units) u.update(dt, this.terrain, move);
     const ring = this.ring;
     if (!ring) return;
     const sel = this.selected;

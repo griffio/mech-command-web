@@ -120,7 +120,20 @@ async function main() {
   const sizer = new CanvasSizer(canvas, gpu.device.limits.maxTextureDimension2D, (w, h) => sea.resize(w, h), MAX_PIXELS);
   if (fixedScale !== null) sizer.renderScale = fixedScale;
   const scaler = new RenderScaleController();
-  const survey = new PerfSurvey(sea, (scale) => (sizer.renderScale = scale), () => sizer.width * sizer.height);
+  // The survey measures from fixed views, so runs can be compared: the opening view over the player's lance, and the
+  // whole map zoomed out, which is mostly sea.
+  const opening = { target: [info.camera.x / upm, 0, -info.camera.y / upm] as [number, number, number], distance: 340, yawDeg: 0, pitchDeg: 42 };
+  const view = (v: typeof opening) => () => {
+    controls.target = [...v.target];
+    controls.distance = v.distance;
+    controls.yawDeg = v.yawDeg;
+    controls.pitchDeg = v.pitchDeg;
+  };
+  const survey = new PerfSurvey(sea, (scale) => (sizer.renderScale = scale), () => sizer.width * sizer.height, [
+    { name: 'opening', apply: view(opening) },
+    { name: 'zoomed-out', apply: view({ target: [0, 0, 0], distance: 2300, yawDeg: 0, pitchDeg: 62 }) },
+  ]);
+  let before: typeof opening | null = null;
   mountSurveyPanel(survey, () => ({
     kind: 'sea-survey',
     map: mapName,
@@ -132,8 +145,14 @@ async function main() {
     land: sea.landStats,
     oceanDrawnFraction: Math.round(sea.oceanArc.drawnFraction * 100) / 100,
     objects: { props: world.propCount, units: world.units.length, drawn: sea.models.drawnInstances, shadowCasters: sea.models.shadowInstances },
-  }), () => {
-    if (fixedScale === null) sizer.renderScale = scaler.scale;
+  }), {
+    start: () => {
+      before = { target: [...controls.target], distance: controls.distance, yawDeg: controls.yawDeg, pitchDeg: controls.pitchDeg };
+    },
+    done: () => {
+      if (fixedScale === null) sizer.renderScale = scaler.scale;
+      if (before) view(before)();
+    },
   });
 
   setStatus('');
@@ -147,7 +166,7 @@ async function main() {
     last = now;
     controls.update();
     camera.update(canvas.clientWidth / Math.max(canvas.clientHeight, 1));
-    world.update(dt);
+    world.update(dt, !survey.running);
     // The shadow map covers what the camera looks at, growing in 25% steps as it zooms out (so it doesn't shimmer).
     const reach = Math.min(Math.max(controls.distance * 1.1, 120), 1300);
     sea.shadowFocus = { x: controls.target[0], z: controls.target[2], half: 1.25 ** Math.ceil(Math.log(reach) / Math.log(1.25)) };
@@ -183,7 +202,7 @@ async function main() {
 }
 
 /** The panel's button runs the survey and POSTs the report to the dev server (see vite.config.ts). */
-function mountSurveyPanel(survey: PerfSurvey, context: () => Record<string, unknown>, done: () => void) {
+function mountSurveyPanel(survey: PerfSurvey, context: () => Record<string, unknown>, hooks: { start(): void; done(): void }) {
   const panel = document.getElementById('perf')!;
   const labelInput = document.getElementById('perf-label') as HTMLInputElement;
   const button = document.getElementById('perf-run') as HTMLButtonElement;
@@ -203,7 +222,8 @@ function mountSurveyPanel(survey: PerfSurvey, context: () => Record<string, unkn
     }
     button.disabled = true;
     document.body.classList.add('perf-running');
-    log.textContent = "Sea survey: don't touch the screen for about two minutes.\n";
+    log.textContent = "Sea survey: don't touch the screen for about three minutes.\n";
+    hooks.start();
     let rows: SurveyRow[] = [];
     try {
       rows = await survey.run((line) => (log.textContent += line + '\n'));
@@ -219,7 +239,7 @@ function mountSurveyPanel(survey: PerfSurvey, context: () => Record<string, unkn
     } finally {
       button.disabled = false;
       document.body.classList.remove('perf-running');
-      done();
+      hooks.done();
     }
   });
 }

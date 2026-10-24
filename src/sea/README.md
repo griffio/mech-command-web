@@ -20,7 +20,7 @@ Changed here:
 | `render/ocean/ocean-surface.ts`, `ocean_surface.wgsl` | Group 3 also carries the map's ground; the sea floor shows through shallow water |
 | `render/terrain/terrain-renderer.ts`, `terrain.wgsl` | The land wears MC2's pre-lit colour map instead of procedural scrub and rock, and receives the models' shadows |
 | `sim/terrain/surf.ts` | Surf width, strength and phase are a `SurfStyle`; MC2 uses a narrow band breaking in step along the coast |
-| `app/perf-survey.ts` | Steps for the sea, land and sky only; deltas against the nearest baseline |
+| `app/perf-survey.ts` | Steps for the sea, land, sky, MC2's models and shadows; measured from fixed camera views; repeats stretch each interval to six refreshes, and each cost is reported as a range; deltas against the nearest baseline in the same view |
 | `render/gpu-timer.ts` | An unused constructor field dropped (this project's lint settings) |
 
 New:
