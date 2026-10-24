@@ -26,7 +26,7 @@ const LEASH_M = 180;
  * The scenarios' rule (MC2 has none: only gunnery counts): soldiers are hard to hit, power armour less so, and woods
  * make infantry harder still. Shares of the firer's gunnery.
  */
-const INFANTRY_HIT = { trooper: 0.5, armoured: 0.7, cover: 0.6 };
+const INFANTRY_HIT = { trooper: 0.5, armoured: 0.7, cover: 0.6, dugIn: 0.6 };
 /** Seconds between puffs of a missile's smoke trail. */
 const SMOKE_INTERVAL_S = 0.04;
 /** Flight speeds, metres a second (the original's bolt files); lasers and PPCs are instant. */
@@ -152,7 +152,7 @@ export class Battle {
   }
 
   private tick(): void {
-    const units = this.world.units.filter((u) => u.alive && u.combat);
+    const units = this.world.units.filter((u) => u.alive && u.combat && !u.embarked);
     this.look(units);
     this.routes = 0;
     for (const u of units) {
@@ -242,7 +242,8 @@ export class Battle {
     if (u.engaging && end && Math.hypot(end[0] - t.x, end[1] - t.z) < 15) return; // still headed the right way
     this.routes++;
     this.nextRoute.set(u, this.time + REROUTE_S);
-    const route = this.world.grid ? this.world.grid.findPath(u.x, u.z, t.x, t.z) : [[t.x, t.z] as [number, number]];
+    const grid = this.world.gridFor(u);
+    const route = grid ? grid.findPath(u.x, u.z, t.x, t.z) : [[t.x, t.z] as [number, number]];
     if (route) {
       u.walkTo(route);
       u.engaging = true;
@@ -375,7 +376,8 @@ export class Battle {
   private hitModifier(t: SeaUnit): number {
     if (t.kind !== 'infantry') return 1;
     const size = (t.combat?.stats.tonnage ?? 1) <= 1 ? INFANTRY_HIT.trooper : INFANTRY_HIT.armoured;
-    return size * (this.world.grid?.forestAt(t.x, t.z) ? INFANTRY_HIT.cover : 1);
+    const cover = this.world.grid?.forestAt(t.x, t.z) ? INFANTRY_HIT.cover : 1;
+    return size * cover * (t.squad?.dugIn ? INFANTRY_HIT.dugIn : 1);
   }
 
   private destroyed(t: SeaUnit, by: SeaUnit, report: HitReport): void {

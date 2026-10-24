@@ -81,7 +81,7 @@ checkout(
 const needs = scenarioNeeds(readScenarios(mission));
 const scenarioMechs = needs.units.filter((u) => tree.has(`objects/${u}.csv`));
 const scenarioObjects = [...needs.units.filter((u) => !scenarioMechs.includes(u)), ...needs.props];
-const models = collectMissionModels(tree, missionData, [...new Set([...extraMechs, ...scenarioMechs])], scenarioObjects);
+const models = collectMissionModels(tree, missionData, [...new Set([...extraMechs, ...scenarioMechs])], scenarioObjects, needs.appearances);
 const aseFiles = [...models.specs.values()].flatMap((s) => [s.base, ...s.clips.map((c) => c.file)]);
 checkout('models', aseFiles);
 

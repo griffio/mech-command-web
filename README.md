@@ -101,10 +101,24 @@ AI commander.
 - **Infantry** are MC2's own soldiers and Elementals, drawn 1.8 times life size
   so they can be found among mechs. They're harder to hit than in MC2 (half as
   often, Elementals 70%, and less again in woods), and as cheap as tickets go.
+- **Water.** Mechs wade the shallows MC2's movement map allows (up to about
+  4 m), hovercraft (the Centipede and Harasser, flagged so in their object files)
+  cross any water, and tracked vehicles and infantry keep to land and fords
+  under a metre.
+- **Airlift.** Infantry are slow and keep to land, so MC2's Karnov VTOL flies
+  them: select an infantry squad, press **Airlift** and tap where to drop it, or
+  just send it somewhere it can't walk to. The Karnov lifts off from the base,
+  comes in on its own landing animation, hovers with its cargo arm down while the
+  squad boards, and sets it down at the other end. It can't be shot down, and the
+  squad can't be hurt while aboard.
+- **Digging in.** Infantry that stand still for 8 seconds dig in behind
+  sandbags (MC2's sandbag bunker) and are much harder to hit until they move:
+  mechs take ground fast, infantry are flown in to hold it.
 
 The AI sends most of its squads at the point it can take next, holds the
 one it must keep with the rest, stands its LRM carriers off behind the attack,
-and pulls badly hurt squads back to reinforce. Played against itself, a match
+flies its infantry to far or cut-off points, and pulls badly hurt squads back to
+reinforce. Played against itself, a match
 runs about 12 minutes and goes either way. `?scenario=none` shows the mission's
 own units instead, and `?speed=4` runs the world four times as fast (for
 testing).

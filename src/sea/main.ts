@@ -312,13 +312,27 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World) {
     if (p.cancelled || p.handled || Math.hypot(e.clientX - p.x, e.clientY - p.y) > SLOP_PX) return;
     const hit = pickAt(e.clientX, e.clientY);
     if (!hit) return;
-    if (Array.isArray(hit)) world.orderMove(hit[0], hit[1]);
-    else world.tapUnit(hit, e.shiftKey);
+    if (Array.isArray(hit)) {
+      // With Airlift pressed, the tap is where the Karnov drops the selected infantry.
+      if (airlift.getAttribute('aria-pressed') === 'true') {
+        world.orderAirlift(hit[0], hit[1]);
+        airlift.setAttribute('aria-pressed', 'false');
+      } else world.orderMove(hit[0], hit[1]);
+    } else world.tapUnit(hit, e.shiftKey);
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
 
   const run = document.getElementById('cmd-run') as HTMLButtonElement;
+  const airlift = document.getElementById('cmd-airlift') as HTMLButtonElement;
+  airlift.addEventListener('click', () => airlift.setAttribute('aria-pressed', String(airlift.getAttribute('aria-pressed') !== 'true')));
+  // Airlift is offered while the selection has infantry and the scenario has a Karnov.
+  const offerAirlift = () => {
+    const on = !!world.match?.airlift.available && [...world.selectedSquads].some((q) => q.isInfantry && !q.airborne);
+    if (airlift.hidden === on) airlift.hidden = !on;
+    if (!on) airlift.setAttribute('aria-pressed', 'false');
+  };
+  window.setInterval(offerAirlift, 250);
   document.getElementById('cmd-all')!.addEventListener('click', () => world.selectAll());
   document.getElementById('cmd-stop')!.addEventListener('click', () => world.stopSelected());
   run.addEventListener('click', () => {

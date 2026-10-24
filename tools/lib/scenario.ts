@@ -43,6 +43,10 @@ export interface Scenario {
   /** In order from the first side's end of the lane to the second's. */
   points: ScenarioPoint[];
   sides: ScenarioSide[];
+  /** The appearance of the VTOL that airlifts infantry ("karnov"). */
+  transport: string;
+  /** Object file of the prop dug-in infantry shelter behind ("sandbagbunker"). */
+  garrison: string;
 }
 
 export function readScenarios(map: string, dir = 'scenarios'): Scenario[] {
@@ -55,15 +59,18 @@ export function readScenarios(map: string, dir = 'scenarios'): Scenario[] {
   return files.map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Scenario).filter((s) => s.map === map);
 }
 
-/** Every unit type and prop object the scenarios use. */
-export function scenarioNeeds(scenarios: Scenario[]): { units: string[]; props: string[] } {
+/** Every unit type, prop object and bare appearance the scenarios use. */
+export function scenarioNeeds(scenarios: Scenario[]): { units: string[]; props: string[]; appearances: string[] } {
   const units = new Set<string>();
   const props = new Set<string>();
+  const appearances = new Set<string>();
   for (const s of scenarios) {
+    if (s.transport) appearances.add(s.transport.toLowerCase());
+    if (s.garrison) props.add(s.garrison.toLowerCase());
     for (const side of s.sides) {
       props.add(side.flag.toLowerCase());
       for (const squad of side.squads) for (const u of squad.units) units.add(u.toLowerCase());
     }
   }
-  return { units: [...units], props: [...props] };
+  return { units: [...units], props: [...props], appearances: [...appearances] };
 }

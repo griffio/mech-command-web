@@ -44,7 +44,8 @@ export class Fit {
   bool(section: string, key: string, fallback = false): boolean {
     const v = this.get(section, key);
     if (v === undefined) return fallback;
-    return /^(true|1|yes)$/i.test(v);
+    // MC2 writes `b Key = t` (or f) as often as TRUE.
+    return /^(t|true|1|yes)$/i.test(v);
   }
 }
 

@@ -150,7 +150,7 @@ json(`${mapDir}/map.json`, {
 const needs = scenarioNeeds(readScenarios(missionName));
 const scenarioMechs = needs.units.filter((u) => src.has(`objects/${u}.csv`));
 const scenarioObjects = [...needs.units.filter((u) => !scenarioMechs.includes(u)), ...needs.props];
-const models = collectMissionModels(src, mission, [...new Set([...extraMechs, ...scenarioMechs])], scenarioObjects);
+const models = collectMissionModels(src, mission, [...new Set([...extraMechs, ...scenarioMechs])], scenarioObjects, needs.appearances);
 const textures = new TextureLibrary(src, { upscaled, maxSize: Number(values['texture-size']) });
 const modelPath = (spec: ModelSpec) => `models/${spec.kind === 'mech' ? 'mechs' : 'props'}/${spec.key}.glb`;
 // A vehicle keeps its nodes only when it has clips to move them (infantry); otherwise it's one rigid piece.
@@ -267,7 +267,7 @@ for (const u of needs.units) {
   };
 }
 const props = Object.fromEntries(
-  needs.props.flatMap((p) => {
+  [...needs.props, ...needs.appearances].flatMap((p) => {
     const spec = models.specs.get(models.extraModels.get(p) ?? '');
     return spec ? [[p, modelPath(spec)]] : [];
   }),

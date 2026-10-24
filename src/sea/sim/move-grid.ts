@@ -1,4 +1,6 @@
-// MC2's movement map (mclib/move.h MapCell, mclib/move.cpp MoveMap::setUp) and an A* pathfinder over it for mechs.
+// MC2's movement map (mclib/move.h MapCell, mclib/move.cpp MoveMap::setUp) and an A* pathfinder over it, for each way
+// of moving: mechs wade the shallows (MC2's own rule), hovercraft cross any water, and ground vehicles and infantry keep
+// to land and fords.
 //
 // The map is 3 cells to a terrain tile: 300 x 300 cells of 8.5 m for mc2_01, row 0 at the north edge, laid over the
 // same square as the terrain. World positions are the WebGPU page's metres (x east, z south).
@@ -17,6 +19,11 @@ const CLEAR = 1;
 const FOREST_EXTRA = 1.8;
 const BLOCKED = Infinity;
 const DIAGONAL = Math.SQRT2;
+/** Ground vehicles and infantry ford water this deep at most, metres. */
+const FORD_M = 1;
+
+/** How a unit gets about: walking (wading the shallows), hovering over water, or on wheels, tracks or foot. */
+export type MoveClass = 'mech' | 'hover' | 'ground';
 
 export class MoveGrid {
   /** Cost to enter each cell for a mech (Infinity: blocked). */
@@ -24,6 +31,9 @@ export class MoveGrid {
   /** Metres from the west and north edges of the map to the grid's first cell edge. */
   readonly x0: number;
   readonly z0: number;
+
+  /** Connected region of each open cell (-1 blocked), worked out on first use. */
+  private regions: Int32Array | null = null;
 
   constructor(
     cells: Uint32Array,
@@ -33,19 +43,64 @@ export class MoveGrid {
     readonly cell: number,
     /** World x, z of the north-west corner. */
     origin: [number, number],
+    readonly moveClass: MoveClass = 'mech',
+    /** Water depth at a world point, metres (0 on land): for fords. */
+    depthAt: (x: number, z: number) => number = () => 0,
   ) {
     [this.x0, this.z0] = origin;
     this.cost = new Float32Array(width * height);
     for (let i = 0; i < cells.length; i++) {
       const d = cells[i]!;
       let c: number;
+      if (d & OFFMAP) c = BLOCKED;
+      else if (moveClass === 'hover' && d & (SHALLOW | DEEP)) c = CLEAR;
       // Mechs wade shallow water and are kept out of deep water (MOVEPARAM_WATER_SHALLOW, mclib/move.cpp:4886).
-      if (d & OFFMAP || d & DEEP) c = BLOCKED;
-      else if (!(d & PASSABLE)) c = BLOCKED;
+      else if (d & DEEP || !(d & PASSABLE)) c = BLOCKED;
       else c = CLEAR + (d & FOREST ? FOREST_EXTRA : 0);
-      if (d & SHALLOW && !(d & PASSABLE)) c = BLOCKED;
+      if (moveClass === 'ground' && c < BLOCKED) {
+        const [x, z] = this.centre(Math.floor(i / width), i % width);
+        if (depthAt(x, z) > FORD_M) c = BLOCKED;
+      }
       this.cost[i] = c;
     }
+  }
+
+  /** Can a unit of this class get from one world point to the other (each moved to its nearest open cell)? */
+  connected(ax: number, az: number, bx: number, bz: number): boolean {
+    const a = this.nearestOpen(ax, az);
+    const b = this.nearestOpen(bx, bz);
+    if (!a || !b) return false;
+    const regions = this.regions ?? this.label();
+    return regions[a[0] * this.width + a[1]] === regions[b[0] * this.width + b[1]];
+  }
+
+  /** Flood-fill the open cells into connected regions (four neighbours, as a route never cuts a blocked corner). */
+  private label(): Int32Array {
+    const { width, height } = this;
+    const regions = new Int32Array(width * height).fill(-1);
+    const stack: number[] = [];
+    let next = 0;
+    for (let start = 0; start < regions.length; start++) {
+      if (regions[start] !== -1 || this.cost[start]! >= BLOCKED) continue;
+      regions[start] = next;
+      stack.push(start);
+      while (stack.length) {
+        const i = stack.pop()!;
+        const r = (i / width) | 0;
+        const c = i % width;
+        for (const [nr, nc] of [[r + 1, c], [r - 1, c], [r, c + 1], [r, c - 1]] as const) {
+          if (!this.open(nr, nc)) continue;
+          const k = nr * width + nc;
+          if (regions[k] === -1) {
+            regions[k] = next;
+            stack.push(k);
+          }
+        }
+      }
+      next++;
+    }
+    this.regions = regions;
+    return regions;
   }
 
   cellOf(x: number, z: number): [number, number] {

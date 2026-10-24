@@ -14,7 +14,7 @@ export class UnitBars {
       const combat = u.combat;
       if (!combat) continue;
       const integrity = combat.integrity;
-      const want = u.alive && !u.hidden && (world.selected.has(u) || world.inspected === u || integrity < 0.999);
+      const want = u.alive && !u.hidden && !u.embarked && (world.selected.has(u) || world.inspected === u || integrity < 0.999);
       const bar = want ? this.bar(u) : this.bars.get(u);
       if (!bar) continue;
       if (!u.alive) {

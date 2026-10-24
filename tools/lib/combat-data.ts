@@ -65,6 +65,8 @@ export interface VehicleStats {
   name: string;
   tonnage: number;
   speed: number;
+  /** A hovercraft crosses water, deep or shallow ([General] HoverCraft). */
+  hover: boolean;
   /** How far the turret turns either way, degrees (0: the hull must face the target). */
   turretYaw: number;
   armor: Record<VehicleLocation, number>;
@@ -223,6 +225,7 @@ export function readVehicleStats(fit: Fit, components: ComponentTable): VehicleS
     name: fit.str('ObjectType', 'Name'),
     tonnage: fit.num('General', 'CurTonnage'),
     speed: fit.num('VehicleDynamics', 'MaxVelocity'),
+    hover: fit.bool('General', 'HoverCraft'),
     turretYaw: fit.num('VehicleDynamics', 'MaxTurretYaw'),
     armor: Object.fromEntries(sections.map(([k, s]) => [k, fit.num(s, 'MaxArmorPoints')])) as Record<VehicleLocation, number>,
     structure: Object.fromEntries(sections.map(([k, s]) => [k, fit.num(s, 'CurInternalStructure', fit.num('InternalStructure', s, 1))])) as Record<

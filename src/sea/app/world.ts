@@ -20,7 +20,7 @@ import type { SeaRenderer } from '../render/sea-renderer';
 import { parseGlb, type ModelData } from '../models/glb';
 import { AFFINE_FLOATS, Animator, mulAffine, placement, restPose } from '../models/pose';
 import { MechCombat, VehicleCombat } from '../sim/combat';
-import { MoveGrid } from '../sim/move-grid';
+import { MoveGrid, type MoveClass } from '../sim/move-grid';
 import type { Terrain } from '../sim/terrain/terrain';
 import { Battle } from './battle';
 import { Match } from './match';
@@ -86,6 +86,10 @@ export class SeaUnit {
   hidden = false;
   /** Where its squad was sent: an AI unit chases only targets near it. */
   leash: { x: number; z: number } | null = null;
+  /** Height above the ground (or the sea) it flies at, metres: the Karnov's. */
+  altitude = 0;
+  /** Aboard a transport: out of the fight, not drawn; it rides at the transport's position. */
+  embarked = false;
   /** A soldier's body is gone when he dies (there's no wreck to leave). */
   private gone = false;
   instance: ModelInstance;
@@ -129,6 +133,13 @@ export class SeaUnit {
   /** A unit the player can give orders to. */
   get commandable(): boolean {
     return this.team === PLAYER_TEAM && this.combat !== null && this.alive;
+  }
+
+  /** How it gets about: a mech wades the shallows, a hovercraft crosses water, the rest keep to land and fords. */
+  get moveClass(): MoveClass {
+    if (this.kind === 'mech') return 'mech';
+    const stats = this.combat?.stats;
+    return stats && 'hover' in stats && stats.hover ? 'hover' : 'ground';
   }
 
   /** Where its weapons point: the torso's facing on a mech, the turret's on a vehicle (MC2 degrees). */
@@ -175,8 +186,14 @@ export class SeaUnit {
     return this.instance.model.radius * 0.55;
   }
 
-  play(name: string, fade = 0.2): void {
-    this.animator?.play(name, fade);
+  /** Play a clip, looping unless `once` (then it holds its last frame: see clipDone). */
+  play(name: string, fade = 0.2, once = false): void {
+    this.animator?.play(name, fade, 0, !once);
+  }
+
+  /** A clip played once has reached its end. */
+  get clipDone(): boolean {
+    return this.animator?.finished ?? true;
   }
 
   walkTo(points: [number, number][]): void {
@@ -216,16 +233,16 @@ export class SeaUnit {
 
   /** `move` false keeps the unit where it is (still animating): the perf survey wants the same picture throughout. */
   update(dt: number, terrain: Terrain, move = true): void {
-    if (move && this.alive) {
+    if (move && this.alive && !this.embarked) {
       if (this.route.length) this.steer(dt);
       else if (this.target) this.faceTarget(dt);
       this.aim(dt);
     }
     this.animator?.update(dt);
-    this.instance.visible = !this.hidden && !this.gone;
-    // Mechs and infantry wade; vehicles (the hovercraft, at least) ride on the water.
+    this.instance.visible = !this.hidden && !this.gone && !this.embarked;
+    // Mechs, infantry and tracks wade; hovercraft (and anything flying) go over the water.
     const ground = terrain.heightAt(this.x, this.z);
-    const y = this.kind === 'vehicle' ? Math.max(ground, 0) : ground;
+    const y = (this.moveClass === 'hover' || this.altitude > 0 ? Math.max(ground, 0) : ground) + this.altitude;
     placement(this.frame, this.x, y, this.z, (this.rotation * Math.PI) / 180, this.scale);
     const nodes = this.animator?.matrices ?? this.rest;
     const out = this.instance.matrices;
@@ -294,7 +311,10 @@ export class World {
   /** With a scenario, the squads the player has selected (the selection is their living members). */
   readonly selectedSquads = new Set<Squad>();
   propCount = 0;
+  /** The movement map for mechs (and for anything that just needs a place to stand). */
   readonly grid: MoveGrid | null;
+  /** The movement map for each way of moving. */
+  readonly grids: Record<MoveClass, MoveGrid> | null;
   /** The fighting: targets, fire, damage and wrecks. */
   battle!: Battle;
   /** The scenario's match, if one is being played. */
@@ -316,9 +336,10 @@ export class World {
     private readonly info: MapInfo,
     private readonly unitsFile: UnitsFile,
     private readonly combatFile: CombatFile,
-    grid: MoveGrid | null,
+    grids: Record<MoveClass, MoveGrid> | null,
   ) {
-    this.grid = grid;
+    this.grids = grids;
+    this.grid = grids?.mech ?? null;
   }
 
   private get scale(): number {
@@ -341,9 +362,13 @@ export class World {
     ]);
     // The movement map covers the same square as the terrain: side * 128 MC2 units.
     const extent = (info.side * info.worldUnitsPerVertex) / info.worldUnitsPerMeter;
-    const grid =
-      cells && info.move ? new MoveGrid(new Uint32Array(cells), info.move.width, info.move.height, extent / info.move.width, [-extent / 2, -extent / 2]) : null;
-    const world = new World(sea, terrain, info, unitsFile, combatFile, grid);
+    const move = info.move;
+    const grid = (moveClass: MoveClass) =>
+      new MoveGrid(new Uint32Array(cells!), move!.width, move!.height, extent / move!.width, [-extent / 2, -extent / 2], moveClass, (x, z) =>
+        terrain.depthAt(x, z),
+      );
+    const grids = cells && move ? { mech: grid('mech'), hover: grid('hover'), ground: grid('ground') } : null;
+    const world = new World(sea, terrain, info, unitsFile, combatFile, grids);
     world.battle = new Battle(world, sea.fx);
     progress('Loading buildings and trees…');
     await world.placeProps(objects);
@@ -496,6 +521,11 @@ export class World {
     // Its own name: the renderer shares models by name, and every ring is shaped to its own ground.
     const name = `marker-ring ${x} ${z} ${radius} ${color.join(',')}`;
     return this.sea.models.addModel(selectionRing(name, color, 1 - 3 / radius, radius, lift), { scale: 1, unlit: true, gain: 1.4, castsShadow: false });
+  }
+
+  /** A scenario prop's GLB, by object file name or appearance (flags, sandbags, the Karnov), or null. */
+  propPath(key: string): string | null {
+    return this.unitsFile.props?.[key.toLowerCase()] ?? null;
   }
 
   /** A scenario prop's model (a flag), by object file name, or null if it wasn't exported. */
@@ -684,8 +714,9 @@ export class World {
     const slots = formationSlots(units.length, FORMATION_SPACING);
     let routed = 0;
     units.forEach((u, i) => {
-      const [sx, sz] = this.openNear(x + slots[i]![0], z + slots[i]![1]);
-      const route = this.grid ? this.grid.findPath(u.x, u.z, sx, sz) : [[sx, sz] as [number, number]];
+      const [sx, sz] = this.openNear(x + slots[i]![0], z + slots[i]![1], u.moveClass);
+      const grid = this.gridFor(u);
+      const route = grid ? grid.findPath(u.x, u.z, sx, sz) : [[sx, sz] as [number, number]];
       if (route) {
         // A move order ends an attack order; the mech still fires at what it passes.
         u.attackOrder = null;
@@ -697,11 +728,16 @@ export class World {
     return routed;
   }
 
+  /** Airlift the selected infantry squads to a point (the rest of the selection goes there on its own feet). */
+  orderAirlift(x: number, z: number): number {
+    return this.orderSquadsMove(x, z, true);
+  }
+
   /**
    * Send the selected squads to a point, side by side across their line of advance (the squad nearest the point in the
-   * middle), each in its own formation.
+   * middle), each in its own formation. Infantry that can't get there on foot (or are told to fly) are airlifted.
    */
-  private orderSquadsMove(x: number, z: number): number {
+  private orderSquadsMove(x: number, z: number, airlift = false): number {
     const squads = [...this.selectedSquads].filter((q) => q.alive.length);
     if (!squads.length) return 0;
     let cx = 0;
@@ -716,7 +752,11 @@ export class World {
     squads.sort((a, b) => dist(a.centroid()!, x, z) - dist(b.centroid()!, x, z));
     squads.forEach((q, i) => {
       const o = (i % 2 ? 1 : -1) * Math.ceil(i / 2) * SQUAD_SPACING;
-      q.move(this, x + px * o, z + pz * o);
+      const [tx, tz] = [x + px * o, z + pz * o];
+      const c = q.centroid()!;
+      const walkable = this.grids?.ground.connected(c[0], c[1], tx, tz) ?? true;
+      if (q.isInfantry && (airlift || !walkable) && this.match?.airliftSquad(q, tx, tz)) return;
+      q.move(this, tx, tz);
     });
     return squads.length;
   }
@@ -743,7 +783,8 @@ export class World {
     let best: SeaUnit | null = null;
     let bestT = Infinity;
     for (const u of this.units) {
-      if (!u.alive || u.hidden) continue; // a tap on a wreck (or on nothing the player can see) is a tap on the ground
+      // A tap on a wreck, a Karnov, or anything the player can't see, is a tap on the ground.
+      if (!u.alive || u.hidden || u.embarked || !u.combat) continue;
       const c = u.instance.center;
       const t = (c[0] - o[0]) * d[0] + (c[1] - o[1]) * d[1] + (c[2] - o[2]) * d[2];
       if (t <= 0 || t >= bestT) continue;
@@ -773,9 +814,24 @@ export class World {
     return null;
   }
 
-  /** The nearest point a mech can stand on (the point itself if it's open, else the centre of the nearest open cell). */
-  openNear(x: number, z: number): [number, number] {
-    const grid = this.grid;
+  /** The movement map a unit routes over. */
+  gridFor(u: SeaUnit): MoveGrid | null {
+    return this.grids?.[u.moveClass] ?? null;
+  }
+
+  /** How units of a scenario type get about. */
+  typeMoveClass(type: string): MoveClass {
+    const t = this.unitsFile.types?.[type];
+    if (!t || t.kind === 'mech') return 'mech';
+    return t.stats && this.combatFile.vehicles[t.stats]?.hover ? 'hover' : 'ground';
+  }
+
+  /**
+   * The nearest point a unit of a movement class can stand on (the point itself if it's open, else the centre of the
+   * nearest open cell).
+   */
+  openNear(x: number, z: number, moveClass: MoveClass = 'mech'): [number, number] {
+    const grid = this.grids?.[moveClass];
     if (!grid) return [x, z];
     const [r, c] = grid.cellOf(x, z);
     if (grid.open(r, c)) return [x, z];
@@ -786,7 +842,7 @@ export class World {
   /** A green ring under each selected unit (from a pool that grows as needed) and a red one under an inspected unit. */
   private updateRings(): void {
     if (!this.ringModel) return;
-    const marked = [...this.selected];
+    const marked = [...this.selected].filter((u) => !u.embarked);
     while (this.rings.length < marked.length) this.rings.push(this.sea.models.addInstance(this.ringModel));
     this.rings.forEach((ring, i) => this.placeRing(ring, marked[i]));
     if (this.inspectRing) this.placeRing(this.inspectRing, this.inspected ?? undefined);

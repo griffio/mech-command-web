@@ -190,8 +190,12 @@ export function readObjectInfo(src: SourceData, list: string[], typeNumber: numb
   };
 }
 
-/** Clip names for a ground vehicle's animations, by `[Animation:N]` index (mclib/gvactor.cpp: stand, walk, run). */
+/**
+ * Clip names for a ground vehicle's animations, by `[Animation:N]` index: stand, walk and run for infantry; the Karnov
+ * VTOL's are hover, land and take off (tgl/karnov.ini).
+ */
 const VEHICLE_CLIPS = ['idle', 'walk', 'run'];
+const KARNOV_CLIPS = ['hover', 'land', 'takeoff'];
 
 export interface ModelSpec {
   /** Output key and file stem: the appearance name, lower case. */
@@ -223,7 +227,7 @@ export function modelSpec(src: SourceData, appearance: string, kind: ModelSpec['
       if (file) clips.push({ clip: g.clip, gesture: g.gesture, file });
     }
   } else if (kind === 'vehicle') {
-    VEHICLE_CLIPS.forEach((clip, n) => {
+    (appearance.toLowerCase() === 'karnov' ? KARNOV_CLIPS : VEHICLE_CLIPS).forEach((clip, n) => {
       const name = fit.str(`Animation:${n}`, 'AnimationName');
       const file = name ? src.actual(`tgl/${name}.ase`) : null;
       if (file) clips.push({ clip, gesture: -1, file });
@@ -239,7 +243,7 @@ export interface MissionModels {
   partModels: (string | null)[];
   specs: Map<string, ModelSpec>;
   infos: Map<number, ObjectInfo | null>;
-  /** Per extra object file name (lower case): model key, or null. */
+  /** Per extra object file name (lower case), or appearance: model key, or null. */
   extraModels: Map<string, string | null>;
   /** Reason -> number of placements affected. */
   unresolved: Map<string, number>;
@@ -249,7 +253,14 @@ export interface MissionModels {
  * `extraMechs`: appearance names (e.g. "atlas") to include even if the mission does not use them. `extraObjects`:
  * object file names (e.g. "infantry", "davionflag") likewise, for vehicles, infantry and props.
  */
-export function collectMissionModels(src: SourceData, mission: Mission, extraMechs: string[] = [], extraObjects: string[] = []): MissionModels {
+export function collectMissionModels(
+  src: SourceData,
+  mission: Mission,
+  extraMechs: string[] = [],
+  extraObjects: string[] = [],
+  /** Appearances with no object file of their own (the Karnov), as animated vehicles. */
+  extraAppearances: string[] = [],
+): MissionModels {
   const list = src.objectList();
   const infos = new Map<number, ObjectInfo | null>();
   const info = (n: number) => {
@@ -291,6 +302,9 @@ export function collectMissionModels(src: SourceData, mission: Mission, extraMec
       ? { fitName: name, cls: fit.num('ObjectClass', 'ObjectTypeNum', -1), name: fit.str('ObjectType', 'Name'), appearance: fit.str('ObjectType', 'AppearanceName') }
       : null;
     extraModels.set(name, i?.appearance ? resolveInfo(i, kindOf(i.cls)) : skip(`extra object "${name}" has no object file or appearance`));
+  }
+  for (const appearance of extraAppearances) {
+    extraModels.set(appearance, resolveInfo({ fitName: appearance, cls: ObjectClass.Vehicle, name: appearance, appearance }, 'vehicle'));
   }
   for (const appearance of extraMechs) {
     const spec = modelSpec(src, appearance, 'mech');

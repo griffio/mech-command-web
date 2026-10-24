@@ -23,6 +23,17 @@ export class Squad {
   reinforceAt = 0;
   /** The AI commander's current job for it (a point index, or -1 to fall back to base). */
   assignment: number | null = null;
+  /** A Karnov is coming for it, or carrying it. */
+  airborne = false;
+  /** Infantry that have stood still long enough are dug in (harder to hit, behind sandbags). */
+  dugIn = false;
+  stillFor = 0;
+
+  /** Everyone left in it is on foot (it can dig in, and be airlifted). */
+  get isInfantry(): boolean {
+    const alive = this.alive;
+    return alive.length > 0 && alive.every((u) => u.kind === 'infantry');
+  }
 
   constructor(
     readonly team: number,
@@ -71,6 +82,8 @@ export class Squad {
   status(now: number): string {
     if (this.respawnAt !== null) return `back in ${Math.max(0, Math.ceil(this.respawnAt - now))} s`;
     const alive = this.alive;
+    if (this.airborne) return alive.some((u) => u.embarked) ? 'airlifted' : 'awaiting the Karnov';
+    if (this.dugIn) return alive.some((u) => u.target && u.target.alive) ? 'dug in, fighting' : 'dug in';
     if (alive.some((u) => u.target && u.combat && u.target.alive)) return 'fighting';
     if (this.order.kind === 'retreat') return 'falling back';
     if (alive.some((u) => u.route.length)) return 'moving';
@@ -84,8 +97,9 @@ export class Squad {
     const alive = this.alive.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
     const slots = formationSlots(alive.length, this.spacing);
     alive.forEach((u, i) => {
-      const [sx, sz] = world.openNear(x + slots[i]![0], z + slots[i]![1]);
-      const route = world.grid ? world.grid.findPath(u.x, u.z, sx, sz) : [[sx, sz] as [number, number]];
+      const [sx, sz] = world.openNear(x + slots[i]![0], z + slots[i]![1], u.moveClass);
+      const grid = world.gridFor(u);
+      const route = grid ? grid.findPath(u.x, u.z, sx, sz) : [[sx, sz] as [number, number]];
       // A move order ends an attack order; the squad still fires at what it passes.
       u.attackOrder = null;
       u.engaging = false;

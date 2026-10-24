@@ -3,6 +3,8 @@
   "map": "mc2_01",
   "tickets": 150,
   "pointRadius": 55,
+  "transport": "karnov",
+  "garrison": "sandbagbunker",
   "points": [
     {
       "name": "Airfield",

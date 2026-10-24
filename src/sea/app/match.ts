@@ -6,10 +6,14 @@
 // only the first point beyond the ones it holds; standing in a point's circle with nobody from the other side there
 // moves it toward you (an enemy's point goes neutral first, losing its owner tickets). Tickets go with every unit lost
 // and every point lost; a side loses when its tickets run out, or when the other side holds every point.
+//
+// Infantry are slow and keep to land: a Karnov airlifts them (airlift.ts). Infantry that stand still a while dig in
+// behind sandbags, and are much harder to hit.
 import type { Scenario, ScenarioSide } from '../../assets';
 import { PLAYER_PAINT, paintFromMission, type PaintScheme } from '../../paint.ts';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import { bestRange } from '../sim/combat';
+import { Airlift } from './airlift';
 import { Squad } from './squads';
 import { PLAYER_TEAM, bearing, type SeaUnit, type World } from './world';
 
@@ -26,6 +30,10 @@ const REINFORCE_S = 8;
 const REFIT_RATE = 0.04;
 /** Seconds before a wiped-out squad comes back: longer for mechs. */
 const RESPAWN_S = { mech: 45, other: 25 };
+/** Seconds infantry must stand still to dig in. */
+const DIG_IN_S = 8;
+/** The AI flies its infantry to goals further than this on foot (or out of reach on foot), metres. */
+const AI_AIRLIFT_M = 450;
 /** Bodies are cleared after this; wrecks after the second. */
 const CLEAR_INFANTRY_S = 4;
 const CLEAR_WRECK_S = 150;
@@ -68,6 +76,10 @@ export class Match {
   time = 0;
   /** AI commanders, by team (the player's side has none, unless a test adds one). */
   readonly commanders = new Map<number, CommanderAI>();
+  readonly airlift: Airlift;
+  /** The sandbags dug-in squads shelter behind (null if the converter didn't export them). */
+  private garrisonModel: GpuModel | null = null;
+  private readonly sandbags = new Map<Squad, ModelInstance>();
   /** Each point's ring in each colour (shaped to its ground), by point index and holder. */
   private readonly ringModels = new Map<string, GpuModel>();
   private readonly flagModels = new Map<number, GpuModel | null>();
@@ -80,6 +92,7 @@ export class Match {
     private readonly world: World,
     readonly scenario: Scenario,
   ) {
+    this.airlift = new Airlift(world, scenario.transport ? world.propPath(scenario.transport) : null);
     this.sides = scenario.sides.map((s) => ({
       team: s.team,
       name: s.name,
@@ -106,6 +119,7 @@ export class Match {
       for (const key of ['0', '1', 'none']) match.ringModels.set(`${i}:${key}`, await world.markerRing(RING_COLOR[key]!, p.x, p.z, p.radius));
     }
     for (const side of match.sides) match.flagModels.set(side.team, await world.propModel(side.spec.flag));
+    if (scenario.garrison) match.garrisonModel = await world.propModel(scenario.garrison);
     for (const p of match.points) {
       match.pointRings.push(world.addMarker(match.ringModels.get(`${match.pointRings.length}:none`)!, p.x, p.z, 1));
       match.pointFlags.push(null);
@@ -148,7 +162,9 @@ export class Match {
   update(dt: number): void {
     if (this.winner !== null) return;
     this.time += dt;
+    this.airlift.update(dt);
     this.capture(dt);
+    this.garrison(dt);
     this.supply(dt);
     this.clearDead();
     this.fog();
@@ -166,7 +182,7 @@ export class Match {
   private capture(dt: number): void {
     const counts = this.points.map(() => [0, 0] as [number, number]);
     for (const u of this.world.units) {
-      if (!u.alive || !u.combat || (u.team !== 0 && u.team !== 1)) continue;
+      if (!u.alive || !u.combat || u.embarked || (u.team !== 0 && u.team !== 1)) continue;
       this.points.forEach((p, i) => {
         if (Math.hypot(u.x - p.x, u.z - p.z) <= p.radius) counts[i]![u.team]!++;
       });
@@ -196,6 +212,35 @@ export class Match {
       }
       if (p.owner !== null) this.onEvent(`${this.side(p.owner).name} captured ${p.name}`, p.owner);
     });
+  }
+
+  /** Fly a squad of infantry to a point, if the airlift can; false if it can't (it has no Karnov, or is flying). */
+  airliftSquad(squad: Squad, x: number, z: number): boolean {
+    if (!squad.isInfantry || !this.airlift.available || squad.airborne) return false;
+    const side = this.side(squad.team);
+    void this.airlift.request(squad, side.base, side.paint, x, z);
+    if (squad.team === PLAYER_TEAM) this.onEvent(`${squad.name}: the Karnov is on its way`, squad.team);
+    return true;
+  }
+
+  /** Infantry that have stood still a while dig in behind sandbags; moving off (or boarding) gives it up. */
+  private garrison(dt: number): void {
+    for (const side of this.sides) {
+      for (const squad of side.squads) {
+        const alive = squad.alive;
+        const still = squad.isInfantry && !squad.airborne && alive.every((u) => !u.route.length && !u.embarked);
+        squad.stillFor = still ? squad.stillFor + dt : 0;
+        const dug = still && squad.stillFor >= DIG_IN_S;
+        if (dug === squad.dugIn) continue;
+        squad.dugIn = dug;
+        const old = this.sandbags.get(squad);
+        if (old) this.world.removeMarker(old);
+        this.sandbags.delete(squad);
+        const c = squad.centroid();
+        if (dug && c && this.garrisonModel) this.sandbags.set(squad, this.world.addMarker(this.garrisonModel, c[0], c[1]));
+        if (dug && side.team === PLAYER_TEAM) this.onEvent(`${squad.name} dug in`, side.team);
+      }
+    }
   }
 
   /** Wiped-out squads come back after a while; squads at their base get their missing members back and refit. */
@@ -244,7 +289,11 @@ export class Match {
         const r = Math.floor(k / 3);
         const c = (k % 3) - 1;
         const spacing = this.world.typeKind(type) === 'infantry' ? 6 : 16;
-        const [x, z] = this.world.openNear(cx + Math.sin(across) * c * spacing - Math.sin((facing * Math.PI) / 180) * r * spacing, cz + Math.cos(across) * c * spacing - Math.cos((facing * Math.PI) / 180) * r * spacing);
+        const [x, z] = this.world.openNear(
+          cx + Math.sin(across) * c * spacing - Math.sin((facing * Math.PI) / 180) * r * spacing,
+          cz + Math.cos(across) * c * spacing - Math.cos((facing * Math.PI) / 180) * r * spacing,
+          this.world.typeMoveClass(type),
+        );
         const unit = await this.world.spawnType(type, side.team, x, z, facing, squad.spec.gunnery, side.paint);
         if (!unit) continue;
         unit.squad = squad;
@@ -269,7 +318,8 @@ export class Match {
   /** The player sees only the enemies their side sees (and the wrecks of the ones it destroyed). */
   private fog(): void {
     const seen = this.world.battle.seenBy(PLAYER_TEAM);
-    for (const u of this.world.units) u.hidden = u.team !== PLAYER_TEAM && u.alive && !seen.has(u);
+    // Aircraft (no stats) are seen from afar.
+    for (const u of this.world.units) u.hidden = u.team !== PLAYER_TEAM && u.alive && !!u.combat && !seen.has(u);
   }
 
   private judge(): void {
@@ -332,6 +382,7 @@ export class CommanderAI {
       .sort((a, b) => b.strength - a.strength)
       .forEach((squad, i) => {
         // Fall back when badly hurt; stay until whole again.
+        if (squad.airborne) return;
         if (squad.assignment === -1 && (squad.missing > 0 || squad.strength < 0.9)) return;
         if (squad.strength < 0.35) return this.send(squad, -1, side.base.x, side.base.z, true);
         const index = i < attackers || hold === null ? target : hold;
@@ -346,12 +397,20 @@ export class CommanderAI {
       });
   }
 
-  /** Order a squad to a place, unless it already has that job and is there or on its way. */
+  /**
+   * Order a squad to a place, unless it already has that job and is there or on its way. Infantry fly to goals they
+   * can't reach on foot, or that are far.
+   */
   private send(squad: Squad, assignment: number, x: number, z: number, retreat: boolean): void {
     const c = squad.centroid();
     const busy = squad.alive.some((u) => u.route.length || u.attackOrder);
     if (squad.assignment === assignment && (busy || (c && Math.hypot(c[0] - x, c[1] - z) < 45))) return;
     squad.assignment = assignment;
-    squad.move(this.world, x + (Math.random() - 0.5) * 30, z + (Math.random() - 0.5) * 30, retreat);
+    const [tx, tz] = [x + (Math.random() - 0.5) * 30, z + (Math.random() - 0.5) * 30];
+    const far = c && Math.hypot(c[0] - tx, c[1] - tz) > AI_AIRLIFT_M;
+    const unreachable = c && this.world.grids && !this.world.grids.ground.connected(c[0], c[1], tx, tz);
+    // Falling back flies only when there's no way home on foot.
+    if (squad.isInfantry && (unreachable || (far && !retreat)) && this.match.airliftSquad(squad, tx, tz)) return;
+    squad.move(this.world, tx, tz, retreat);
   }
 }

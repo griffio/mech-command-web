@@ -201,6 +201,10 @@ pre#perf-status {
   font-weight: 600;
 }
 
+#commands button[hidden] {
+  display: none;
+}
+
 #commands button[aria-pressed='true'] {
   background: #2f6f4f;
   color: #fff;
