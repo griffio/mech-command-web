@@ -114,15 +114,31 @@ export abstract class Combatant {
 
   /**
    * Fire a ready weapon: roll to hit, start its recycle (hit or miss), and spend a round, except on a Streak miss, which
-   * launches nothing. True when it hits.
+   * launches nothing. True when it hits. `modifier` scales the gunnery before the clamp: 1 in MC2's rules, where nothing
+   * else counts; the scenarios make small targets and infantry in cover harder to hit.
    */
-  fire(w: WeaponMount, now: number, rng: Rng): boolean {
-    const chance = Math.trunc(Math.min(Math.max(this.gunnery, 5), 95));
+  fire(w: WeaponMount, now: number, rng: Rng, modifier = 1): boolean {
+    const chance = Math.trunc(Math.min(Math.max(this.gunnery * modifier, 5), 95));
     const hit = roll(rng, 100) < chance;
     w.readyAt = now + w.def.recycle;
     if ((hit || !w.def.streak) && w.def.ammo !== null) this.ammo.set(w.def.ammo, (this.ammo.get(w.def.ammo) ?? 0) - 1);
     return hit;
   }
+
+  /**
+   * Refit at a base (the scenarios' rule; MC2 has repair bays and trucks): a `rate` share of full armour, structure and
+   * ammunition comes back a second. A location whose structure is whole again gets its components and weapons back.
+   */
+  refit(dt: number, rate: number): void {
+    if (!this.alive) return;
+    for (const [id, full] of Object.entries(this.fullAmmo)) {
+      const key = Number(id);
+      this.ammo.set(key, Math.min(full, (this.ammo.get(key) ?? 0) + full * rate * dt));
+    }
+    this.repair(rate * dt);
+  }
+
+  protected abstract repair(share: number): void;
 
   /** Damage it can still take, as a share of new (0..1). */
   abstract get integrity(): number;
@@ -196,6 +212,18 @@ export class MechCombat extends Combatant {
     const now = this.armor[l] + this.structure[l] + (rear ? this.armor[rear] : 0);
     const max = this.stats.armor[l] + this.stats.structure[l] + (rear ? this.stats.armor[rear] : 0);
     return max ? now / max : 0;
+  }
+
+  protected repair(share: number): void {
+    for (const l of Object.keys(this.armor) as ArmorLocation[]) this.armor[l] = Math.min(this.stats.armor[l], this.armor[l] + this.stats.armor[l] * share);
+    for (const l of Object.keys(this.structure) as MechLocation[]) {
+      const max = this.stats.structure[l];
+      if (this.structure[l] >= max) continue;
+      this.structure[l] = Math.min(max, this.structure[l] + max * share);
+      if (this.structure[l] < max) continue;
+      for (const c of this.components[l]) c.hit = false;
+      for (const w of this.weapons) if (w.location === l) w.destroyed = false;
+    }
   }
 
   hitLocation(arc: Arc, rng: Rng): ArmorLocation {
@@ -330,6 +358,13 @@ export class VehicleCombat extends Combatant {
     if (!this.alive) return 0;
     const sides = Object.keys(this.armor) as VehicleLocation[];
     return Math.min(...sides.map((s) => (this.armor[s] + this.structure[s]) / (this.stats.armor[s] + this.stats.structure[s] || 1)));
+  }
+
+  protected repair(share: number): void {
+    for (const l of Object.keys(this.armor) as VehicleLocation[]) {
+      this.armor[l] = Math.min(this.stats.armor[l], this.armor[l] + this.stats.armor[l] * share);
+      this.structure[l] = Math.min(this.stats.structure[l], this.structure[l] + this.stats.structure[l] * share);
+    }
   }
 
   /** The turret takes a shot when the average of two d100 rolls is 70 or more (17.7%); otherwise the side it struck. */

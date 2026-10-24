@@ -57,6 +57,12 @@ export class MoveGrid {
     return [this.x0 + (col + 0.5) * this.cell, this.z0 + (row + 0.5) * this.cell];
   }
 
+  /** Is the ground at a world point woodland (where infantry find cover)? */
+  forestAt(x: number, z: number): boolean {
+    const [r, c] = this.cellOf(x, z);
+    return this.open(r, c) && this.cost[r * this.width + c]! > CLEAR;
+  }
+
   open(row: number, col: number): boolean {
     return row >= 0 && col >= 0 && row < this.height && col < this.width && this.cost[row * this.width + col]! < BLOCKED;
   }

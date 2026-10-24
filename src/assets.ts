@@ -51,7 +51,7 @@ export interface MechInfo {
 
 export interface UnitPlacement {
   model: string;
-  kind: 'mech' | 'vehicle';
+  kind: 'mech' | 'vehicle' | 'infantry';
   name: string;
   csv: string;
   /** Key of its stats in combat.json (mechs or vehicles), or null when it has none. */
@@ -67,10 +67,22 @@ export interface UnitPlacement {
   colors: [string, string, string];
 }
 
+/** A unit type a scenario uses: how it moves and fights, its model, and its stats key in combat.json. */
+export interface UnitTypeInfo {
+  kind: 'mech' | 'vehicle' | 'infantry';
+  name: string;
+  model: string;
+  stats: string | null;
+}
+
 export interface UnitsFile {
   mechs: Record<string, MechInfo>;
   units: UnitPlacement[];
   showcase: string[];
+  /** The scenarios' unit types, by key ("atlas", "infantry"). */
+  types?: Record<string, UnitTypeInfo>;
+  /** The scenarios' props (flags), by object file name: their model. */
+  props?: Record<string, string>;
 }
 
 export type {
@@ -84,6 +96,7 @@ export type {
   VehicleStats,
   WeaponDef,
 } from '../tools/lib/combat-data.ts';
+export type { Scenario, ScenarioPoint, ScenarioSide, ScenarioSquad } from '../tools/lib/scenario.ts';
 
 /** combat.json: the weapons and ammunition the map's units carry, and each unit type's armour and loadout. */
 export interface CombatFile {

@@ -13,6 +13,7 @@ import { parseArgs } from 'node:util';
 import { parseAse } from './lib/ase.ts';
 import { collectMissionModels, readMission } from './lib/mission.ts';
 import { RemoteZip } from './lib/remote-zip.ts';
+import { readScenarios, scenarioNeeds } from './lib/scenario.ts';
 import { SourceData } from './lib/srcdata.ts';
 
 const REPO = 'https://github.com/alariq/mc2srcdata.git';
@@ -76,7 +77,11 @@ checkout(
   'pilots',
   [...new Set(missionData.profiles.values())].map((p) => tree.actual(`missions/warriors/${p}.fit`)).filter((p): p is string => p !== null),
 );
-const models = collectMissionModels(tree, missionData, extraMechs);
+// The scenarios' units (mechs by their stats file, the rest by object file) and props join the mission's.
+const needs = scenarioNeeds(readScenarios(mission));
+const scenarioMechs = needs.units.filter((u) => tree.has(`objects/${u}.csv`));
+const scenarioObjects = [...needs.units.filter((u) => !scenarioMechs.includes(u)), ...needs.props];
+const models = collectMissionModels(tree, missionData, [...new Set([...extraMechs, ...scenarioMechs])], scenarioObjects);
 const aseFiles = [...models.specs.values()].flatMap((s) => [s.base, ...s.clips.map((c) => c.file)]);
 checkout('models', aseFiles);
 

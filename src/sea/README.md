@@ -39,7 +39,10 @@ New:
   selection ring, move and attack orders.
 - `sim/combat.ts`: MC2's combat rules; `app/battle.ts`: targets, fire, damage and wrecks on those rules (see
   Gameplay below); `app/unit-bars.ts`: health bars over the units.
-- `sim/move-grid.ts`: routes over MC2's movement map. `app/mc2-map.ts`: MC2 heights in metres and a bilinear upsample. `app/orbit-controls.ts`:
+- `sim/move-grid.ts`: routes over MC2's movement map.
+- `app/match.ts`: Advance and Secure on a scenario (`scenarios/*.json`): capture points, tickets, bases that
+  reinforce and refit, fog of war, and the AI commander. `app/squads.ts`: squads (formation moves, attacks, strength).
+  `app/match-hud.ts`: the ticket and point bar, the squad cards, and squad letters over the field. `app/mc2-map.ts`: MC2 heights in metres and a bilinear upsample. `app/orbit-controls.ts`:
   the RTS camera with touch. `main.ts`.
 - `../paint.ts` (shared with the three.js viewer): MC2's team paint.
 

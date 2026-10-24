@@ -190,10 +190,17 @@ export function readObjectInfo(src: SourceData, list: string[], typeNumber: numb
   };
 }
 
+/** Clip names for a ground vehicle's animations, by `[Animation:N]` index (mclib/gvactor.cpp: stand, walk, run). */
+const VEHICLE_CLIPS = ['idle', 'walk', 'run'];
+
 export interface ModelSpec {
   /** Output key and file stem: the appearance name, lower case. */
   key: string;
-  kind: 'prop' | 'mech';
+  /**
+   * A prop is flattened into one node. A mech has gesture clips. A vehicle keeps its nodes when its appearance has
+   * animations (infantry walk and run), and is flattened otherwise.
+   */
+  kind: 'prop' | 'mech' | 'vehicle';
   appearance: string;
   /** Repository-relative .ase path of LOD 0. */
   base: string;
@@ -201,10 +208,12 @@ export interface ModelSpec {
   ini: string;
 }
 
-export function modelSpec(src: SourceData, appearance: string, kind: 'prop' | 'mech'): ModelSpec | null {
+export function modelSpec(src: SourceData, appearance: string, kind: ModelSpec['kind']): ModelSpec | null {
   const ini = src.actual(`tgl/${appearance}.ini`);
   if (!ini) return null;
-  const fileName = src.fit(ini).str('TGLData', 'FileName0');
+  const fit = src.fit(ini);
+  // Most appearances name LOD 0 as FileName0; ground vehicles with animations (infantry) as plain FileName.
+  const fileName = fit.str('TGLData', 'FileName0') || fit.str('TGLData', 'FileName');
   const base = fileName ? src.actual(`tgl/${fileName}.ase`) : null;
   if (!base) return null;
   const clips: ModelSpec['clips'] = [];
@@ -213,6 +222,12 @@ export function modelSpec(src: SourceData, appearance: string, kind: 'prop' | 'm
       const file = src.actual(`tgl/${appearance}${g.suffix}.ase`);
       if (file) clips.push({ clip: g.clip, gesture: g.gesture, file });
     }
+  } else if (kind === 'vehicle') {
+    VEHICLE_CLIPS.forEach((clip, n) => {
+      const name = fit.str(`Animation:${n}`, 'AnimationName');
+      const file = name ? src.actual(`tgl/${name}.ase`) : null;
+      if (file) clips.push({ clip, gesture: -1, file });
+    });
   }
   return { key: appearance.toLowerCase(), kind, appearance, base, clips, ini };
 }
@@ -224,12 +239,17 @@ export interface MissionModels {
   partModels: (string | null)[];
   specs: Map<string, ModelSpec>;
   infos: Map<number, ObjectInfo | null>;
+  /** Per extra object file name (lower case): model key, or null. */
+  extraModels: Map<string, string | null>;
   /** Reason -> number of placements affected. */
   unresolved: Map<string, number>;
 }
 
-/** `extraMechs`: appearance names (e.g. "atlas") to include even if the mission does not use them. */
-export function collectMissionModels(src: SourceData, mission: Mission, extraMechs: string[] = []): MissionModels {
+/**
+ * `extraMechs`: appearance names (e.g. "atlas") to include even if the mission does not use them. `extraObjects`:
+ * object file names (e.g. "infantry", "davionflag") likewise, for vehicles, infantry and props.
+ */
+export function collectMissionModels(src: SourceData, mission: Mission, extraMechs: string[] = [], extraObjects: string[] = []): MissionModels {
   const list = src.objectList();
   const infos = new Map<number, ObjectInfo | null>();
   const info = (n: number) => {
@@ -242,9 +262,7 @@ export function collectMissionModels(src: SourceData, mission: Mission, extraMec
     unresolved.set(reason, (unresolved.get(reason) ?? 0) + 1);
     return null;
   };
-  const resolve = (n: number, kind: 'prop' | 'mech'): string | null => {
-    const i = info(n);
-    if (!i || !i.appearance) return skip(`object type ${n} (${list[n] ?? '?'}): no appearance`);
+  const resolveInfo = (i: ObjectInfo, kind: ModelSpec['kind']): string | null => {
     const key = i.appearance.toLowerCase();
     if (specs.has(key)) return key;
     const spec = modelSpec(src, i.appearance, kind);
@@ -252,20 +270,32 @@ export function collectMissionModels(src: SourceData, mission: Mission, extraMec
     specs.set(key, spec);
     return key;
   };
+  const kindOf = (cls: number | undefined): ModelSpec['kind'] => (cls === ObjectClass.Mech ? 'mech' : cls === ObjectClass.Vehicle ? 'vehicle' : 'prop');
+  const resolve = (n: number, kind: ModelSpec['kind']): string | null => {
+    const i = info(n);
+    if (!i || !i.appearance) return skip(`object type ${n} (${list[n] ?? '?'}): no appearance`);
+    return resolveInfo(i, kind);
+  };
 
   const objectModels = new Map<number, string | null>();
   for (const o of mission.objects) {
     if (!objectModels.has(o.type)) objectModels.set(o.type, resolve(o.type, 'prop'));
     else if (objectModels.get(o.type) === null) resolve(o.type, 'prop');
   }
-  const partModels = mission.parts.map((p) => {
-    const i = info(p.objectNumber);
-    return resolve(p.objectNumber, i?.cls === ObjectClass.Mech ? 'mech' : 'prop');
-  });
+  const partModels = mission.parts.map((p) => resolve(p.objectNumber, kindOf(info(p.objectNumber)?.cls)));
+  const extraModels = new Map<string, string | null>();
+  for (const name of extraObjects) {
+    const fitName = src.actual(`objects/${name}.fit`);
+    const fit = fitName ? src.fit(fitName) : null;
+    const i: ObjectInfo | null = fit
+      ? { fitName: name, cls: fit.num('ObjectClass', 'ObjectTypeNum', -1), name: fit.str('ObjectType', 'Name'), appearance: fit.str('ObjectType', 'AppearanceName') }
+      : null;
+    extraModels.set(name, i?.appearance ? resolveInfo(i, kindOf(i.cls)) : skip(`extra object "${name}" has no object file or appearance`));
+  }
   for (const appearance of extraMechs) {
     const spec = modelSpec(src, appearance, 'mech');
     if (spec) specs.set(spec.key, spec);
     else skip(`extra mech "${appearance}" has no tgl ini/ase`);
   }
-  return { objectModels, partModels, specs, infos, unresolved };
+  return { objectModels, partModels, specs, infos, extraModels, unresolved };
 }

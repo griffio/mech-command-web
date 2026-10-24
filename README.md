@@ -70,10 +70,44 @@ them; add `?perf` to the URL to run one anyway (it can't send the report).
 ## The game (WebGPU)
 
 Controls: drag to pan, right-drag or two fingers to turn and tilt, scroll or
-pinch to zoom. Tap one of your mechs to select it, long-press (or shift-click)
-to add one to the selection or take it out, or use **Select all**; tap the ground
-to send the selection there, or an enemy to attack it. **Stop** halts them (and
-drops an attack order) and **Run** makes them run.
+pinch to zoom. Tap a squad (or its card along the bottom) to select it,
+long-press (or shift-click) to add one to the selection or take it out, or use
+**Select all**; tap the ground to send the selection there, or an enemy to attack
+it. A second tap on a selected squad's card looks at it, and a tap on a point in
+the top bar looks at the point. **Stop** halts them (and drops an attack order)
+and **Run** makes mechs run.
+
+### Advance and Secure
+
+The game plays a scenario (`scenarios/*.json`, chosen by map), modelled on the
+game *Squad*. You command squads in real time: two lances of mechs, a rifle
+squad and a squad of Elementals (power armour). The Liao garrison has two
+lances, an armour squad, LRM carriers, riflemen and Elementals, run by a simple
+AI commander.
+
+- **Points.** Five capture points run along the islands from your base to
+  theirs. Each side can take only the next point beyond the ones it holds:
+  standing in its circle with no enemy there turns it, faster with more units
+  (an enemy point goes neutral first). The top bar shows tickets, each point's
+  holder and progress, and the points in play (dashed).
+- **Tickets.** Every unit lost costs its side tickets (a mech by its weight), and
+  so does every point lost. A side loses when its tickets run out, or wins by
+  holding every point.
+- **Bases.** A wiped-out squad comes back at its base after a while. A squad
+  standing at its base gets missing members back one at a time, and its
+  armour, structure and ammunition refitted.
+- **Fog of war.** You see only the enemies your units see (225 m, the ground
+  blocks the view); their squad letters show while they're seen.
+- **Infantry** are MC2's own soldiers and Elementals, drawn 1.8 times life size
+  so they can be found among mechs. They're harder to hit than in MC2 (half as
+  often, Elementals 70%, and less again in woods), and as cheap as tickets go.
+
+The AI sends most of its squads at the point it can take next, holds the
+one it must keep with the rest, stands its LRM carriers off behind the attack,
+and pulls badly hurt squads back to reinforce. Played against itself, a match
+runs about 12 minutes and goes either way. `?scenario=none` shows the mission's
+own units instead, and `?speed=4` runs the world four times as fast (for
+testing).
 
 Your lance is the mission's three mechs plus the Atlas and Madcat. Orders are
 routed over MC2's movement map (`src/sea/sim/move-grid.ts`): A* over its

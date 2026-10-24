@@ -1,0 +1,171 @@
+{
+  "name": "Advance and Secure: the islands",
+  "map": "mc2_01",
+  "tickets": 150,
+  "pointRadius": 55,
+  "points": [
+    {
+      "name": "Airfield",
+      "x": 762,
+      "z": 158
+    },
+    {
+      "name": "Isthmus",
+      "x": 669,
+      "z": -328
+    },
+    {
+      "name": "Ridge",
+      "x": 149,
+      "z": -515
+    },
+    {
+      "name": "Hill camp",
+      "x": -217,
+      "z": -600
+    },
+    {
+      "name": "West landing",
+      "x": -694,
+      "z": -115
+    }
+  ],
+  "sides": [
+    {
+      "team": 0,
+      "name": "Your battalion",
+      "flag": "davionflag",
+      "base": {
+        "x": 524,
+        "z": 464
+      },
+      "squads": [
+        {
+          "name": "Alpha",
+          "role": "Heavy lance",
+          "units": [
+            "atlas",
+            "madcat",
+            "catapult"
+          ],
+          "gunnery": 55
+        },
+        {
+          "name": "Bravo",
+          "role": "Strike lance",
+          "units": [
+            "werewolf",
+            "bushwacker",
+            "raven"
+          ],
+          "gunnery": 50
+        },
+        {
+          "name": "Charlie",
+          "role": "Rifle squad",
+          "units": [
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry"
+          ],
+          "gunnery": 45
+        },
+        {
+          "name": "Delta",
+          "role": "Elementals",
+          "units": [
+            "poweredarmor",
+            "poweredarmor",
+            "poweredarmor",
+            "poweredarmor"
+          ],
+          "gunnery": 50
+        }
+      ]
+    },
+    {
+      "team": 1,
+      "name": "Liao garrison",
+      "flag": "liaoflag",
+      "base": {
+        "x": -762,
+        "z": 55
+      },
+      "colors": [
+        "#8a1f1a",
+        "#d8c8a0",
+        "#2a2a2a"
+      ],
+      "squads": [
+        {
+          "name": "Tiger",
+          "role": "Fire lance",
+          "units": [
+            "zeus",
+            "hunchback",
+            "starslayer"
+          ],
+          "gunnery": 42
+        },
+        {
+          "name": "Dragon",
+          "role": "Assault lance",
+          "units": [
+            "highlander",
+            "jaegermech",
+            "shadowcat"
+          ],
+          "gunnery": 42
+        },
+        {
+          "name": "Crane",
+          "role": "Armour",
+          "units": [
+            "centipede",
+            "centipede",
+            "harasser",
+            "harasser"
+          ],
+          "gunnery": 38
+        },
+        {
+          "name": "Viper",
+          "role": "Fire support",
+          "units": [
+            "lrmcarrier",
+            "lrmcarrier",
+            "lrmcarrier"
+          ],
+          "gunnery": 38
+        },
+        {
+          "name": "Mantis",
+          "role": "Rifle squad",
+          "units": [
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry"
+          ],
+          "gunnery": 38
+        },
+        {
+          "name": "Monkey",
+          "role": "Elementals",
+          "units": [
+            "poweredarmor",
+            "poweredarmor",
+            "poweredarmor",
+            "poweredarmor"
+          ],
+          "gunnery": 42
+        }
+      ]
+    }
+  ]
+}

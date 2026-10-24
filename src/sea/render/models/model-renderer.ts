@@ -38,6 +38,8 @@ export interface ModelOptions {
   unlit?: boolean;
   /** Brightness, matched to the land's pre-lit colour map. */
   gain: number;
+  /** Casts a shadow (default true; ground markers don't). */
+  castsShadow?: boolean;
 }
 
 /** pos (3), normal (3), uv (2), node (u32). */
@@ -78,6 +80,7 @@ export class GpuModel {
   mainCount = 0;
   shadowFirst = 0;
   shadowCount = 0;
+  castsShadow = true;
 
   constructor(
     readonly name: string,
@@ -255,7 +258,7 @@ export class ModelRenderer {
 
   /** The GPU copy of a model with these options (made once and shared). */
   addModel(data: ModelData, opts: ModelOptions): Promise<GpuModel> {
-    const key = `${data.name}|${opts.scale}|${opts.paint ? paintKey(opts.paint) : ''}|${opts.unlit ? 1 : 0}|${opts.gain}`;
+    const key = `${data.name}|${opts.scale}|${opts.paint ? paintKey(opts.paint) : ''}|${opts.unlit ? 1 : 0}|${opts.gain}|${opts.castsShadow ?? true}`;
     let entry = this.cache.get(key);
     if (!entry) {
       entry = this.build(data, opts);
@@ -350,7 +353,7 @@ export class ModelRenderer {
     for (const model of this.models) {
       model.shadowFirst = slot;
       const show = model.nodeCount > 1 ? drawUnits : drawProps;
-      if (shadowFocus && show) {
+      if (shadowFocus && show && model.castsShadow) {
         const foliage = model.foliage;
         for (const inst of model.instances) {
           if (!inst.visible) continue;
@@ -438,6 +441,7 @@ export class ModelRenderer {
       }),
     );
     const model = new GpuModel(data.name, geometry, materials.filter((m) => m.count > 0), opts.scale);
+    model.castsShadow = opts.castsShadow ?? true;
     this.models.push(model);
     return model;
   }

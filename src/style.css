@@ -251,3 +251,202 @@ pre#perf-status {
 #log .enemy {
   color: #ffb9a6;
 }
+
+/* The match: tickets and capture points along the top, squad cards along the bottom, letters over squads. */
+#match {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgb(20 24 28 / 80%);
+  max-width: calc(100vw - 24px);
+}
+
+#match[hidden],
+#squads[hidden] {
+  display: none;
+}
+
+#match .tickets {
+  min-width: 44px;
+  text-align: center;
+  font: 700 18px/1 system-ui, -apple-system, sans-serif;
+}
+
+#match .tickets.own {
+  color: #4fa3ff;
+}
+
+#match .tickets.enemy {
+  color: #ff5a4a;
+}
+
+#match .lane {
+  display: flex;
+  gap: 4px;
+}
+
+#match .point {
+  position: relative;
+  overflow: hidden;
+  width: 96px;
+  height: 38px;
+  padding: 0 4px;
+  border: 2px solid #9aa0a6;
+  border-radius: 7px;
+  background: #2a3036;
+  color: #fff;
+  font: 600 11px/1.1 system-ui, -apple-system, sans-serif;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 90%);
+  touch-action: manipulation;
+}
+
+#match .point.active {
+  outline: 2px dashed rgb(255 255 255 / 75%);
+  outline-offset: 1px;
+}
+
+#match .point .fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  opacity: 0.55;
+}
+
+#match .point .name,
+#match .point .tag {
+  position: relative;
+  display: block;
+}
+
+#match .point .tag {
+  font-weight: 500;
+  font-size: 10px;
+  opacity: 0.9;
+  min-height: 11px;
+}
+
+#squads {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap-reverse;
+  max-width: calc(100vw - 260px);
+}
+
+/* In a match the squad cards take the bottom edge: the HUD text sits above them, and the help gives way. */
+body.match #hud {
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 76px);
+  right: 260px;
+}
+
+body.match #help {
+  display: none;
+}
+
+#squads .squad {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: 'letter title count' 'letter bar bar' 'letter status status';
+  column-gap: 8px;
+  row-gap: 3px;
+  align-items: center;
+  width: 168px;
+  padding: 6px 8px;
+  border: 1px solid #4a5258;
+  border-radius: 8px;
+  background: rgb(20 24 28 / 85%);
+  color: #e8e4da;
+  font: 12px/1.2 system-ui, -apple-system, sans-serif;
+  text-align: left;
+  touch-action: manipulation;
+}
+
+#squads .squad.selected {
+  border-color: #6fe06f;
+  background: rgb(30 60 36 / 90%);
+}
+
+#squads .squad.lost {
+  opacity: 0.55;
+}
+
+#squads .squad b {
+  grid-area: letter;
+  font-size: 22px;
+  color: #4fa3ff;
+}
+
+#squads .squad .title {
+  grid-area: title;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#squads .squad .title small {
+  font-weight: 400;
+  opacity: 0.75;
+}
+
+#squads .squad .count {
+  grid-area: count;
+  opacity: 0.8;
+}
+
+#squads .squad .bar {
+  grid-area: bar;
+  height: 4px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 15%);
+  overflow: hidden;
+}
+
+#squads .squad .bar i {
+  display: block;
+  height: 100%;
+  background: #5fd35f;
+}
+
+#squads .squad .status {
+  grid-area: status;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.squad-marker {
+  position: absolute;
+  left: -11px;
+  top: -11px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font: 700 12px/1 system-ui, -apple-system, sans-serif;
+  color: #fff;
+  background: rgb(79 163 255 / 85%);
+  border: 2px solid rgb(255 255 255 / 70%);
+  will-change: transform;
+}
+
+.squad-marker.enemy {
+  background: rgb(255 90 74 / 85%);
+}
+
+.squad-marker.selected {
+  border-color: #6fe06f;
+  box-shadow: 0 0 0 2px rgb(111 224 111 / 60%);
+}
+
+.squad-marker[hidden] {
+  display: none;
+}

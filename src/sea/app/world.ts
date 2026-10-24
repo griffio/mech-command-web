@@ -1,8 +1,19 @@
 // MC2's buildings, trees and units on the WebGPU page, in metres (MC2 units / 5.01) and the dreadnought game's axes
 // (x east, y up, z south): placement, the two sides, selection, move orders routed over MC2's movement map, and attack
-// orders (the fighting itself is Battle's).
-import { ASSET_ROOT, loadBinary, loadJson, type CombatFile, type MapInfo, type MechInfo, type ObjectsFile, type UnitsFile } from '../../assets.ts';
-import { PLAYER_PAINT, paintFromMission, type PaintScheme } from '../../paint.ts';
+// orders (the fighting itself is Battle's). With a scenario the units come in squads and play a match (match.ts);
+// without one they are the mission's own.
+import {
+  ASSET_ROOT,
+  loadBinary,
+  loadJson,
+  type CombatFile,
+  type MapInfo,
+  type MechInfo,
+  type ObjectsFile,
+  type Scenario,
+  type UnitsFile,
+} from '../../assets.ts';
+import { PLAYER_PAINT, paintFromMission, paintKey, type PaintScheme } from '../../paint.ts';
 import type { Camera } from '../render/camera';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import type { SeaRenderer } from '../render/sea-renderer';
@@ -12,6 +23,8 @@ import { MechCombat, VehicleCombat } from '../sim/combat';
 import { MoveGrid } from '../sim/move-grid';
 import type { Terrain } from '../sim/terrain/terrain';
 import { Battle } from './battle';
+import { Match } from './match';
+import { formationSlots, type Squad } from './squads';
 
 const TURN_RATE = 120; // degrees per second
 /** Every ground vehicle moves at this, metres a second (gamesys.fit). */
@@ -25,6 +38,15 @@ const GAIN = 1.35;
 const FORMATION_SPACING = 16;
 /** The player's own side (team 0 in the mission file). */
 export const PLAYER_TEAM = 0;
+/** Infantry are drawn this much larger than life, so a commander can find them among mechs eight times their height. */
+const INFANTRY_SCALE = 1.8;
+/** Metres between squads side by side when several are sent to one place. */
+const SQUAD_SPACING = 40;
+/** Names for unit types whose object files name them poorly. */
+const TYPE_NAMES: Record<string, string> = { infantry: 'Trooper', poweredarmor: 'Elemental', lrmcarrier: 'LRM Carrier', harasser: 'Harasser' };
+
+export type UnitKind = 'mech' | 'vehicle' | 'infantry';
+
 /** Paint for burnt-out wrecks: every team colour goes to soot. */
 const WRECK_PAINT: PaintScheme = { red: '#2b2724', green: '#2b2724', blue: '#2b2724' };
 const WRECK_GAIN = 0.55;
@@ -56,6 +78,16 @@ export class SeaUnit {
   engaging = false;
   /** Torso twist (mechs) or turret angle (vehicles) from the hull, degrees. */
   twist = 0;
+  /** Its squad, when it plays in a scenario. */
+  squad: Squad | null = null;
+  /** Its scenario unit type ("atlas", "infantry"), which its replacement takes. */
+  typeKey: string | null = null;
+  /** Out of the player's side's sight (fog of war): not drawn, not picked. */
+  hidden = false;
+  /** Where its squad was sent: an AI unit chases only targets near it. */
+  leash: { x: number; z: number } | null = null;
+  /** A soldier's body is gone when he dies (there's no wreck to leave). */
+  private gone = false;
   instance: ModelInstance;
   readonly info: MechInfo | null;
   readonly modelPath: string;
@@ -70,7 +102,7 @@ export class SeaUnit {
 
   constructor(
     readonly name: string,
-    readonly kind: 'mech' | 'vehicle',
+    readonly kind: UnitKind,
     readonly team: number,
     body: UnitBody,
     /** Its armour, weapons and pilot; null for a unit that has no stats (it can't fight or be hurt). */
@@ -96,7 +128,7 @@ export class SeaUnit {
 
   /** A unit the player can give orders to. */
   get commandable(): boolean {
-    return this.team === PLAYER_TEAM && this.kind === 'mech' && this.alive;
+    return this.team === PLAYER_TEAM && this.combat !== null && this.alive;
   }
 
   /** Where its weapons point: the torso's facing on a mech, the turret's on a vehicle (MC2 degrees). */
@@ -164,8 +196,9 @@ export class SeaUnit {
     this.target = null;
     this.attackOrder = null;
     this.engaging = false;
+    if (this.kind === 'infantry') this.gone = true;
     // The models' destroyed gestures carry no keys; the falls they match frame for frame do.
-    this.animator?.play(fromFront ? 'fallBackward' : 'fallForward', 0.15, 0, false);
+    else this.animator?.play(fromFront ? 'fallBackward' : 'fallForward', 0.15, 0, false);
   }
 
   /** A dead mech has finished falling (a vehicle has nothing to play). */
@@ -173,8 +206,10 @@ export class SeaUnit {
     return !this.animator || this.animator.finished;
   }
 
-  /** Speed from the gesture data (MC2 gives it in metres a second already); vehicles all move alike. */
+  /** Speed from the gesture data (MC2 gives it in metres a second already); vehicles all move alike; infantry at theirs. */
   get speed(): number {
+    const stats = this.combat?.stats;
+    if (this.kind === 'infantry') return stats && 'speed' in stats ? stats.speed : 5;
     if (this.kind === 'vehicle') return VEHICLE_SPEED;
     return this.info?.clips[this.running ? 'run' : 'walk']?.startVelocity ?? 10;
   }
@@ -187,7 +222,8 @@ export class SeaUnit {
       this.aim(dt);
     }
     this.animator?.update(dt);
-    // Mechs wade; vehicles (the hovercraft, at least) ride on the water.
+    this.instance.visible = !this.hidden && !this.gone;
+    // Mechs and infantry wade; vehicles (the hovercraft, at least) ride on the water.
     const ground = terrain.heightAt(this.x, this.z);
     const y = this.kind === 'vehicle' ? Math.max(ground, 0) : ground;
     placement(this.frame, this.x, y, this.z, (this.rotation * Math.PI) / 180, this.scale);
@@ -237,7 +273,8 @@ export class SeaUnit {
     const diff = ((desired - this.rotation + 540) % 360) - 180;
     this.rotation = (this.rotation + Math.sign(diff) * Math.min(Math.abs(diff), TURN_RATE * dt) + 360) % 360;
     this.turning = false;
-    this.play(this.running ? 'run' : 'walk');
+    // Infantry move at a run (their top speed is a running pace).
+    this.play(this.running || this.kind === 'infantry' ? 'run' : 'walk');
     // Turn in place first when the next waypoint is well off to the side.
     if (Math.abs(diff) < 30) {
       const step = Math.min(distance, this.speed * dt);
@@ -254,15 +291,23 @@ export class World {
   readonly selected = new Set<SeaUnit>();
   /** A unit tapped to look at that isn't the player's (shown in the HUD, not ordered). */
   inspected: SeaUnit | null = null;
+  /** With a scenario, the squads the player has selected (the selection is their living members). */
+  readonly selectedSquads = new Set<Squad>();
   propCount = 0;
   readonly grid: MoveGrid | null;
   /** The fighting: targets, fire, damage and wrecks. */
   battle!: Battle;
+  /** The scenario's match, if one is being played. */
+  match: Match | null = null;
   private rings: ModelInstance[] = [];
   private ringModel: GpuModel | null = null;
   private inspectRing: ModelInstance | null = null;
   private readonly glbs = new Map<string, Promise<ModelData>>();
   private readonly wrecks = new Map<string, Promise<GpuModel>>();
+  /** Units' models by GLB, paint and scale: every unit of a type and side shares one (and its textures). */
+  private readonly unitModels = new Map<string, Promise<GpuModel>>();
+  /** Rest poses of marker props (flags), by model. */
+  private readonly markerRest = new Map<GpuModel, Float32Array>();
   private readonly ringFrame = new Float32Array(AFFINE_FLOATS);
 
   private constructor(
@@ -280,7 +325,14 @@ export class World {
     return 1 / this.info.worldUnitsPerMeter;
   }
 
-  static async load(sea: SeaRenderer, terrain: Terrain, info: MapInfo, mapDir: string, progress: (text: string) => void): Promise<World> {
+  static async load(
+    sea: SeaRenderer,
+    terrain: Terrain,
+    info: MapInfo,
+    mapDir: string,
+    progress: (text: string) => void,
+    scenario: Scenario | null = null,
+  ): Promise<World> {
     const [objects, unitsFile, combatFile, cells] = await Promise.all([
       loadJson<ObjectsFile>(mapDir + 'objects.json'),
       loadJson<UnitsFile>(mapDir + 'units.json'),
@@ -296,64 +348,111 @@ export class World {
     progress('Loading buildings and trees…');
     await world.placeProps(objects);
     progress('Loading units…');
-    await Promise.all(
-      unitsFile.units.map(async (u) => {
-        const paint = u.player ? PLAYER_PAINT : paintFromMission(u.colors);
-        // The stats file's name (Werewolf, Bushwacker) reads better than the object file's (werewolf, BushWacker).
-        const unit = await world.spawn(u.model, u.kind, u.csv || u.name, u.team, u.x * world.scale, -u.y * world.scale, u.rotation, paint, {
-          stats: u.stats,
-          gunnery: u.gunnery,
-        });
-        world.units.push(unit);
-      }),
-    );
-    // The showcase mechs (Atlas, Madcat) join the player's lance beside its first mech.
-    const lead = world.units.find((u) => u.commandable);
-    for (const [i, key] of unitsFile.showcase.entries()) {
-      const [x, z] = world.openNear((lead?.x ?? 0) + (i ? 1 : -1) * 2.2 * FORMATION_SPACING, (lead?.z ?? 0) + FORMATION_SPACING);
-      const paint = i % 2 ? PLAYER_PAINT : paintFromMission(['#3a5f8f', '#c8c8c8', '#202830']);
-      const name = key.charAt(0).toUpperCase() + key.slice(1);
-      // Their pilots are regulars (the mission gives them none).
-      world.units.push(await world.spawn(key, 'mech', name, PLAYER_TEAM, x, z, lead?.rotation ?? 0, paint, { stats: key, gunnery: 40 }));
+    if (scenario && unitsFile.types) {
+      world.match = await Match.start(world, scenario);
+    } else {
+      await world.placeMissionUnits();
     }
     // Each type's wreck now, while loading: built at a unit's death, its texture upload stalls the frame.
-    await Promise.all([...new Set(world.units.filter((u) => u.combat).map((u) => u.modelPath))].map((path) => world.wreckModel(path)));
-    world.ringModel = await world.sea.models.addModel(selectionRing('selection-ring', [0.35, 1, 0.3, 1]), { scale: 1, unlit: true, gain: 1.4 });
+    const wrecked = Object.values(unitsFile.types ?? {}).filter((t) => t.kind !== 'infantry').map((t) => t.model);
+    await Promise.all([...new Set([...wrecked, ...world.units.filter((u) => u.combat && u.kind !== 'infantry').map((u) => u.modelPath)])].map((path) => world.wreckModel(path)));
+    world.ringModel = await world.sea.models.addModel(selectionRing('selection-ring', [0.35, 1, 0.3, 1]), { scale: 1, unlit: true, gain: 1.4, castsShadow: false });
     world.inspectRing = world.sea.models.addInstance(
-      await world.sea.models.addModel(selectionRing('inspect-ring', [1, 0.3, 0.2, 1]), { scale: 1, unlit: true, gain: 1.4 }),
+      await world.sea.models.addModel(selectionRing('inspect-ring', [1, 0.3, 0.2, 1]), { scale: 1, unlit: true, gain: 1.4, castsShadow: false }),
     );
-    const first = world.units.find((u) => u.commandable);
-    if (first) world.selected.add(first);
+    if (world.match) {
+      const first = world.match.side(PLAYER_TEAM).squads[0];
+      if (first) world.selectSquad(first, false);
+    } else {
+      const first = world.units.find((u) => u.commandable);
+      if (first) world.selected.add(first);
+    }
     return world;
   }
 
-  /** Put a mech or vehicle on the map (world metres), with its stats from combat.json (`fight.stats` is their key). */
-  async spawn(
-    key: string,
-    kind: 'mech' | 'vehicle',
-    name: string,
-    team: number,
-    x: number,
-    z: number,
-    rotation: number,
-    paint: PaintScheme,
-    fight: { stats: string | null; gunnery: number },
-  ): Promise<SeaUnit> {
-    const info = kind === 'mech' ? (this.unitsFile.mechs[key] ?? null) : null;
-    const modelPath = info ? info.model : `models/props/${key}.glb`;
-    const data = await this.glb(modelPath);
-    const model = await this.sea.models.addModel(data, { scale: this.scale, paint, gain: GAIN });
+  /** The mission's own units, plus the showcase mechs (Atlas, Madcat) beside the player's lance. */
+  private async placeMissionUnits(): Promise<void> {
+    const { unitsFile } = this;
+    await Promise.all(
+      unitsFile.units.map(async (u) => {
+        const paint = u.player ? PLAYER_PAINT : paintFromMission(u.colors);
+        const info = u.kind === 'mech' ? (unitsFile.mechs[u.model] ?? null) : null;
+        // The stats file's name (Werewolf, Bushwacker) reads better than the object file's (werewolf, BushWacker).
+        const unit = await this.spawn({
+          model: info ? info.model : `models/props/${u.model}.glb`,
+          info,
+          kind: u.kind,
+          name: u.csv || u.name,
+          team: u.team,
+          x: u.x * this.scale,
+          z: -u.y * this.scale,
+          rotation: u.rotation,
+          paint,
+          stats: u.stats,
+          gunnery: u.gunnery,
+        });
+        this.units.push(unit);
+      }),
+    );
+    const lead = this.units.find((u) => u.commandable);
+    for (const [i, key] of unitsFile.showcase.entries()) {
+      const [x, z] = this.openNear((lead?.x ?? 0) + (i ? 1 : -1) * 2.2 * FORMATION_SPACING, (lead?.z ?? 0) + FORMATION_SPACING);
+      const info = unitsFile.mechs[key] ?? null;
+      if (!info) continue;
+      // Their pilots are regulars (the mission gives them none).
+      const unit = await this.spawn({
+        model: info.model,
+        info,
+        kind: 'mech',
+        name: key.charAt(0).toUpperCase() + key.slice(1),
+        team: PLAYER_TEAM,
+        x,
+        z,
+        rotation: lead?.rotation ?? 0,
+        paint: i % 2 ? PLAYER_PAINT : paintFromMission(['#3a5f8f', '#c8c8c8', '#202830']),
+        stats: key,
+        gunnery: 40,
+      });
+      this.units.push(unit);
+    }
+  }
+
+  /**
+   * Make a unit at a point (world metres), with its stats from combat.json (`stats` is their key). Units of one model,
+   * paint and size share their GPU model. The caller adds it to `units`.
+   */
+  async spawn(o: {
+    model: string;
+    info: MechInfo | null;
+    kind: UnitKind;
+    name: string;
+    team: number;
+    x: number;
+    z: number;
+    rotation: number;
+    paint: PaintScheme;
+    stats: string | null;
+    gunnery: number;
+  }): Promise<SeaUnit> {
+    const data = await this.glb(o.model);
+    const scale = this.scale * (o.kind === 'infantry' ? INFANTRY_SCALE : 1);
+    const cacheKey = `${o.model}|${paintKey(o.paint)}|${scale}`;
+    let model = this.unitModels.get(cacheKey);
+    if (!model) {
+      model = this.sea.models.addModel(data, { scale, paint: o.paint, gain: GAIN });
+      this.unitModels.set(cacheKey, model);
+    }
     const animator = data.clips.size ? new Animator(data) : null;
     const body: UnitBody = {
-      instance: this.sea.models.addInstance(model),
+      instance: this.sea.models.addInstance(await model),
       animator,
       rest: restPose(data),
-      info,
-      scale: this.scale,
+      info: o.info,
+      scale,
       nodes: new Map(data.nodes.map((n, i) => [n.name, i])),
-      modelPath,
+      modelPath: o.model,
     };
-    const unit = new SeaUnit(name, kind, team, body, this.combatant(kind, fight.stats, fight.gunnery), x, z, rotation);
+    const unit = new SeaUnit(o.name, o.kind, o.team, body, this.combatant(o.kind, o.stats, o.gunnery), o.x, o.z, o.rotation);
     if (animator) {
       animator.play('idle', 0, Math.random() * 3); // out of step, so a lance does not breathe in unison
     }
@@ -361,7 +460,82 @@ export class World {
     return unit;
   }
 
-  private combatant(kind: 'mech' | 'vehicle', stats: string | null, gunnery: number): MechCombat | VehicleCombat | null {
+  /** A scenario unit type at a point (the caller adds it to `units`), or null if the converter didn't export it. */
+  async spawnType(type: string, team: number, x: number, z: number, rotation: number, gunnery: number, paint: PaintScheme): Promise<SeaUnit | null> {
+    const t = this.unitsFile.types?.[type];
+    if (!t) return null;
+    const unit = await this.spawn({
+      model: t.model,
+      info: t.kind === 'mech' ? (this.unitsFile.mechs[type] ?? null) : null,
+      kind: t.kind,
+      name: TYPE_NAMES[type] ?? t.name.charAt(0).toUpperCase() + t.name.slice(1),
+      team,
+      x,
+      z,
+      rotation,
+      paint,
+      stats: t.stats,
+      gunnery,
+    });
+    unit.typeKey = type;
+    return unit;
+  }
+
+  typeKind(type: string): UnitKind {
+    return this.unitsFile.types?.[type]?.kind ?? 'vehicle';
+  }
+
+  /**
+   * A ring `radius` metres across marking the ground about a point (a capture point, a base), lying on the terrain
+   * however it slopes. Stand it with addMarker(model, x, z, 1).
+   */
+  markerRing(color: [number, number, number, number], x: number, z: number, radius: number): Promise<GpuModel> {
+    const base = Math.max(this.terrain.heightAt(x, z), 0);
+    // A little above the ground, so the coarser meshes of distant land don't swallow it.
+    const lift = (a: number, r: number) => Math.max(this.terrain.heightAt(x + Math.cos(a) * r, z + Math.sin(a) * r), 0) - base + 1.5;
+    // Its own name: the renderer shares models by name, and every ring is shaped to its own ground.
+    const name = `marker-ring ${x} ${z} ${radius} ${color.join(',')}`;
+    return this.sea.models.addModel(selectionRing(name, color, 1 - 3 / radius, radius, lift), { scale: 1, unlit: true, gain: 1.4, castsShadow: false });
+  }
+
+  /** A scenario prop's model (a flag), by object file name, or null if it wasn't exported. */
+  async propModel(key: string): Promise<GpuModel | null> {
+    const path = this.unitsFile.props?.[key.toLowerCase()];
+    if (!path) return null;
+    const data = await this.glb(path);
+    const model = await this.sea.models.addModel(data, { scale: this.scale, gain: GAIN });
+    this.markerRest.set(model, restPose(data));
+    return model;
+  }
+
+  /** Stand a marker on the ground: a ring `scale` metres in radius, or a prop at its own size (scale omitted). */
+  addMarker(model: GpuModel, x: number, z: number, scale = this.scale): ModelInstance {
+    const inst = this.sea.models.addInstance(model);
+    const y = this.terrain.heightAt(x, z);
+    const frame = new Float32Array(AFFINE_FLOATS);
+    placement(frame, x, Math.max(y, 0) + 0.3, z, 0, scale);
+    const rest = this.markerRest.get(model);
+    for (let k = 0; k < model.nodeCount; k++) {
+      if (rest) mulAffine(inst.matrices, k * AFFINE_FLOATS, frame, 0, rest, k * AFFINE_FLOATS);
+      else inst.matrices.set(frame, k * AFFINE_FLOATS);
+    }
+    inst.center[0] = x;
+    inst.center[1] = y;
+    inst.center[2] = z;
+    inst.radius = Math.max(inst.radius, scale === this.scale ? model.radius : scale);
+    return inst;
+  }
+
+  replaceMarker(old: ModelInstance, model: GpuModel, x: number, z: number, scale?: number): ModelInstance {
+    this.removeMarker(old);
+    return this.addMarker(model, x, z, scale);
+  }
+
+  removeMarker(inst: ModelInstance): void {
+    this.sea.models.removeInstance(inst);
+  }
+
+  private combatant(kind: UnitKind, stats: string | null, gunnery: number): MechCombat | VehicleCombat | null {
     const c = this.combatFile;
     if (kind === 'mech') {
       const s = stats ? c.mechs[stats] : undefined;
@@ -376,6 +550,27 @@ export class World {
   ammoName(id: number): string {
     const name = this.combatFile.ammo[id]?.name ?? String(id);
     return name.match(/\(([^)]+)\)/)?.[1] ?? name.replace(/( Rack| Pack)? Ammo$/, '');
+  }
+
+  /** The player's squads, when playing a scenario. */
+  get playerSquads(): Squad[] {
+    return this.match?.side(PLAYER_TEAM).squads ?? [];
+  }
+
+  /** Select a squad (its living members, now and as they're replaced), or add it to the selection or take it out. */
+  selectSquad(squad: Squad, add: boolean): void {
+    this.inspected = null;
+    if (!add) this.selectedSquads.clear();
+    if (add && this.selectedSquads.has(squad)) this.selectedSquads.delete(squad);
+    else this.selectedSquads.add(squad);
+    this.syncSelection();
+  }
+
+  /** With a scenario the selection is the selected squads' living members. */
+  private syncSelection(): void {
+    if (!this.match) return;
+    this.selected.clear();
+    for (const q of this.selectedSquads) for (const u of q.alive) this.selected.add(u);
   }
 
   /** A unit was destroyed: it can no longer be selected, and the battle log has said so. */
@@ -423,6 +618,7 @@ export class World {
       if (unit.team !== PLAYER_TEAM && unit.alive && this.selected.size) this.orderAttack(unit);
       return;
     }
+    if (unit.squad) return this.selectSquad(unit.squad, add);
     this.inspected = null;
     if (add) {
       if (this.selected.has(unit)) this.selected.delete(unit);
@@ -435,11 +631,19 @@ export class World {
 
   selectAll(): void {
     this.inspected = null;
+    if (this.match) {
+      for (const q of this.playerSquads) if (q.alive.length) this.selectedSquads.add(q);
+      return this.syncSelection();
+    }
     for (const u of this.units) if (u.commandable) this.selected.add(u);
   }
 
   /** Stop walking and drop any attack order (the mechs still fire at what comes into range). */
   stopSelected(): void {
+    if (this.match) {
+      for (const q of this.selectedSquads) q.hold();
+      return;
+    }
     for (const u of this.selected) {
       u.attackOrder = null;
       u.stop();
@@ -452,6 +656,10 @@ export class World {
 
   /** Send the selection after an enemy: each closes to its best range and fires until one of them is destroyed. */
   orderAttack(target: SeaUnit): number {
+    if (this.match) {
+      for (const q of this.selectedSquads) q.attack(target);
+      return this.selectedSquads.size;
+    }
     let ordered = 0;
     for (const u of this.selected) {
       if (!u.combat) continue;
@@ -469,6 +677,7 @@ export class World {
    * the slots nearest its middle), moved onto open ground, and a route there over the movement map.
    */
   orderMove(x: number, z: number): number {
+    if (this.match) return this.orderSquadsMove(x, z);
     const units = [...this.selected].filter((u) => u.kind === 'mech');
     if (!units.length) return 0;
     units.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
@@ -488,25 +697,58 @@ export class World {
     return routed;
   }
 
+  /**
+   * Send the selected squads to a point, side by side across their line of advance (the squad nearest the point in the
+   * middle), each in its own formation.
+   */
+  private orderSquadsMove(x: number, z: number): number {
+    const squads = [...this.selectedSquads].filter((q) => q.alive.length);
+    if (!squads.length) return 0;
+    let cx = 0;
+    let cz = 0;
+    for (const q of squads) {
+      const [qx, qz] = q.centroid()!;
+      cx += qx / squads.length;
+      cz += qz / squads.length;
+    }
+    const d = Math.hypot(x - cx, z - cz) || 1;
+    const [px, pz] = [-(z - cz) / d, (x - cx) / d];
+    squads.sort((a, b) => dist(a.centroid()!, x, z) - dist(b.centroid()!, x, z));
+    squads.forEach((q, i) => {
+      const o = (i % 2 ? 1 : -1) * Math.ceil(i / 2) * SQUAD_SPACING;
+      q.move(this, x + px * o, z + pz * o);
+    });
+    return squads.length;
+  }
+
   update(dt: number, move = true): void {
-    if (move) this.battle.update(dt);
+    if (move) {
+      this.battle.update(dt);
+      this.match?.update(dt);
+    }
     for (const u of this.units) u.update(dt, this.terrain, move);
+    this.syncSelection();
     this.updateRings();
   }
 
-  /** What a tap at normalised device coordinates hits: a unit, or the ground (world x, z), or nothing. */
-  pick(camera: Camera, ndcX: number, ndcY: number): SeaUnit | [number, number] | null {
+  /**
+   * What a tap at normalised device coordinates hits: a unit, or the ground (world x, z), or nothing. A unit counts if
+   * the tap is within its footprint or `slopPx` screen pixels of its middle (a soldier is a few pixels tall), given the
+   * view's height in pixels.
+   */
+  pick(camera: Camera, ndcX: number, ndcY: number, viewHeightPx = 800, slopPx = 16): SeaUnit | [number, number] | null {
     const o = camera.position;
     const d = camera.rayThrough(ndcX, ndcY);
+    const metresPerPixel = (2 * camera.tanHalfFovY) / viewHeightPx;
     let best: SeaUnit | null = null;
     let bestT = Infinity;
     for (const u of this.units) {
-      if (!u.alive) continue; // a tap on a wreck is a tap on the ground
+      if (!u.alive || u.hidden) continue; // a tap on a wreck (or on nothing the player can see) is a tap on the ground
       const c = u.instance.center;
       const t = (c[0] - o[0]) * d[0] + (c[1] - o[1]) * d[1] + (c[2] - o[2]) * d[2];
       if (t <= 0 || t >= bestT) continue;
       const miss = Math.hypot(o[0] + d[0] * t - c[0], o[1] + d[1] * t - c[1], o[2] + d[2] * t - c[2]);
-      if (miss < u.instance.model.radius * 0.6) {
+      if (miss < Math.max(u.instance.model.radius * 0.6, t * metresPerPixel * slopPx)) {
         best = u;
         bestT = t;
       }
@@ -610,27 +852,28 @@ export function bearing(from: { x: number; z: number }, to: { x: number; z: numb
   return (Math.atan2(to.x - from.x, to.z - from.z) * 180) / Math.PI;
 }
 
-/** Offsets for `count` units about a point: the middle, then rings of six, twelve, ... `spacing` apart. */
-function formationSlots(count: number, spacing: number): [number, number][] {
-  const slots: [number, number][] = [[0, 0]];
-  for (let ring = 1; slots.length < count; ring++) {
-    const around = ring * 6;
-    for (let k = 0; k < around && slots.length < count; k++) {
-      const a = (k / around) * Math.PI * 2 + ring * 0.4;
-      slots.push([Math.cos(a) * ring * spacing, Math.sin(a) * ring * spacing]);
-    }
-  }
-  return slots;
+function dist(p: [number, number], x: number, z: number): number {
+  return Math.hypot(p[0] - x, p[1] - z);
 }
 
-/** A flat ring of radius 0.85..1 on the ground, for marking units (scaled to each one's footprint). */
-function selectionRing(name: string, color: [number, number, number, number]): ModelData {
-  const segments = 48;
+/**
+ * A ring of radius `inner`..1 times `size` on the ground, for marking units (scaled to each one's footprint) and
+ * places; `lift(angle, radius)` raises its edge (to follow the terrain).
+ */
+function selectionRing(
+  name: string,
+  color: [number, number, number, number],
+  inner = 0.85,
+  size = 1,
+  lift: (a: number, r: number) => number = () => 0,
+): ModelData {
+  const segments = size > 4 ? 128 : 48;
   const positions: number[] = [];
   const indices: number[] = [];
   for (let i = 0; i <= segments; i++) {
     const a = (i / segments) * Math.PI * 2;
-    positions.push(Math.cos(a) * 0.85, 0, Math.sin(a) * 0.85, Math.cos(a), 0, Math.sin(a));
+    const [c, s] = [Math.cos(a), Math.sin(a)];
+    positions.push(c * inner * size, lift(a, inner * size), s * inner * size, c * size, lift(a, size), s * size);
     if (i < segments) {
       const k = i * 2;
       indices.push(k, k + 2, k + 1, k + 1, k + 2, k + 3);

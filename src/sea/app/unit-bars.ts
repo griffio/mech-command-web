@@ -14,9 +14,15 @@ export class UnitBars {
       const combat = u.combat;
       if (!combat) continue;
       const integrity = combat.integrity;
-      const want = u.alive && (world.selected.has(u) || world.inspected === u || integrity < 0.999);
+      const want = u.alive && !u.hidden && (world.selected.has(u) || world.inspected === u || integrity < 0.999);
       const bar = want ? this.bar(u) : this.bars.get(u);
       if (!bar) continue;
+      if (!u.alive) {
+        // The dead don't come back (a squad's replacements are new units): drop the bar.
+        bar.el.remove();
+        this.bars.delete(u);
+        continue;
+      }
       const c = u.instance.center;
       const onScreen = want && camera.project(c[0], c[1] + u.instance.model.radius * 0.6, c[2], this.ndc) && Math.abs(this.ndc[0]) < 1.1 && Math.abs(this.ndc[1]) < 1.1;
       if (onScreen !== bar.shown) {

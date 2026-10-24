@@ -4,7 +4,7 @@
 // MC2 world units become metres (5.01 units a metre); the sea level is the mission's water elevation. Axes
 // follow the dreadnought game: x east, y up, z south (north is -z), which is also what the three.js viewer uses.
 import '../style.css';
-import { ASSET_ROOT, loadBinary, loadJson, type MapInfo } from '../assets.ts';
+import { ASSET_ROOT, loadBinary, loadJson, type MapInfo, type Scenario } from '../assets.ts';
 import { OrbitControls } from './app/orbit-controls';
 import { runBattleSurvey } from './app/battle-survey';
 import { runPacingSurvey } from './app/pacing-survey';
@@ -18,6 +18,8 @@ import { DEFAULT_SEA, SeaRenderer, type SeaQuality } from './render/sea-renderer
 import { SurfLines } from './sim/terrain/surf';
 import { Terrain } from './sim/terrain/terrain';
 import { mc2TerrainGrid, upsampleGrid } from './app/mc2-map';
+import { CommanderAI } from './app/match';
+import { MatchHud } from './app/match-hud';
 import { UnitBars } from './app/unit-bars';
 import { PLAYER_TEAM, World, type SeaUnit } from './app/world';
 
@@ -32,10 +34,15 @@ const selection = document.getElementById('selection')!;
 const stats = document.getElementById('stats')!;
 const setStatus = (text: string) => (status.textContent = text);
 
+/** The scenarios (scenarios/*.json), played on their maps; `?scenario=none` shows the mission's own units instead. */
+const SCENARIOS = Object.values(import.meta.glob<Scenario>('../../scenarios/*.json', { eager: true, import: 'default' }));
+
 async function main() {
   const q = new URLSearchParams(location.search);
   const quality: SeaQuality = { oceanSize: q.get('q') === 'B' ? 128 : 256, msaa: q.get('msaa') === '1' ? 1 : 4 };
   const fixedScale = q.has('scale') ? Number(q.get('scale')) : null;
+  // Debugging: run the world this many times as fast (whole steps).
+  const speed = Math.max(1, Math.round(Number(q.get('speed') ?? 1)));
 
   const canvas = document.getElementById('sea') as HTMLCanvasElement;
   let deviceLost = false;
@@ -96,21 +103,40 @@ async function main() {
   setStatus('Building the sea…');
   const sea = await SeaRenderer.create(gpu, canvas, quality, { ...DEFAULT_SEA, ...sun });
   sea.setMap(terrain, ground, surf);
-  const world = await World.load(sea, terrain, info, dir, setStatus);
+  const scenario = q.get('scenario') === 'none' ? null : (SCENARIOS.find((s) => s.map === mapName) ?? null);
+  const world = await World.load(sea, terrain, info, dir, setStatus, scenario);
 
   const camera = new Camera();
   camera.fovYDeg = 40;
   camera.near = 0.5;
+  // A match opens over the player's base, a little toward the first point; otherwise on the mission's camera.
+  const base = world.match?.side(PLAYER_TEAM).base;
+  const first = world.match?.points[0];
+  const start: [number, number, number] =
+    base && first ? [base.x + (first.x - base.x) * 0.3, 0, base.z + (first.z - base.z) * 0.3] : [info.camera.x / upm, 0, -info.camera.y / upm];
   const controls = new OrbitControls(
     canvas,
     camera,
-    { target: [info.camera.x / upm, 0, -info.camera.y / upm], distance: 340, yawDeg: 0, pitchDeg: 42 },
+    { target: start, distance: 340, yawDeg: 0, pitchDeg: 42 },
     { minDistance: 40, maxDistance: 2400, minPitchDeg: 8, maxPitchDeg: 88, halfExtent: (grid.nx / 2) * grid.cell },
   );
   controls.groundAt = (x, z) => terrain.heightAt(x, z);
 
   mountOrders(canvas, camera, world);
   const bars = new UnitBars(document.getElementById('bars')!);
+  const hud = world.match
+    ? new MatchHud(world, world.match, document.getElementById('match')!, document.getElementById('squads')!, document.getElementById('bars')!, (x, z) => {
+        controls.target = [x, 0, z];
+      })
+    : null;
+  if (world.match) {
+    document.body.classList.add('match');
+    const match = world.match;
+    match.onEvent = (text, team) => {
+      logEvent(text, team);
+      if (match.winner !== null) setStatus(text);
+    };
+  }
   world.battle.onEvent = (text, team) => {
     logEvent(text, team);
     if (world.battle.outcome) setStatus(text);
@@ -195,8 +221,11 @@ async function main() {
     controls.update();
     camera.update(canvas.clientWidth / Math.max(canvas.clientHeight, 1));
     const simStart = performance.now();
-    world.update(dt, !survey.running || survey.worldLive);
-    if (!survey.quietHud) bars.update(world, camera, canvas.clientWidth, canvas.clientHeight);
+    for (let i = 0; i < speed; i++) world.update(dt, !survey.running || survey.worldLive);
+    if (!survey.quietHud) {
+      bars.update(world, camera, canvas.clientWidth, canvas.clientHeight);
+      hud?.update(camera, canvas.clientWidth, canvas.clientHeight);
+    }
     const simMs = performance.now() - simStart;
     // The shadow map covers what the camera looks at, growing in 25% steps as it zooms out (so it doesn't shimmer). The
     // shadows fade out between 700 and 1000 m: from further off a tree's shadow is a pixel or two, and the map's own
@@ -233,7 +262,7 @@ async function main() {
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
-  Object.assign(window, { sea: { sea, camera, controls, terrain, sizer, survey, world } });
+  Object.assign(window, { sea: { sea, camera, controls, terrain, sizer, survey, world, CommanderAI } });
 }
 
 /**
@@ -248,7 +277,7 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World) {
   let press: { x: number; y: number; t: number; timer: number; handled: boolean; cancelled: boolean } | null = null;
   const pickAt = (x: number, y: number) => {
     const rect = canvas.getBoundingClientRect();
-    return world.pick(camera, ((x - rect.left) / rect.width) * 2 - 1, -((y - rect.top) / rect.height) * 2 + 1);
+    return world.pick(camera, ((x - rect.left) / rect.width) * 2 - 1, -((y - rect.top) / rect.height) * 2 + 1, rect.height);
   };
   const cancel = () => {
     if (press) {
@@ -302,10 +331,20 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World) {
 function describeSelection(world: World): string {
   const u = world.inspected;
   if (u) {
-    const who = `${u.team === PLAYER_TEAM ? '' : 'Enemy '}${u.name} (${u.kind})`;
+    const who = `${u.team === PLAYER_TEAM ? '' : 'Enemy '}${u.name} (${u.squad ? `squad ${u.squad.name}, ` : ''}${u.kind})`;
     if (!u.alive) return `${who}: destroyed, ${u.combat?.dead ?? ''}`;
     const attackers = [...world.selected].filter((s) => s.attackOrder === u).length;
     return `${who} · ${percent(u)}${attackers ? ` · ${attackers} of yours attacking` : ''}`;
+  }
+  if (world.match) {
+    const squads = [...world.selectedSquads];
+    if (!squads.length) return 'Tap a squad (or its card below) to select it';
+    const hint = 'tap the ground to move, an enemy to attack';
+    if (squads.length > 1) return `Squads ${squads.map((q) => q.name).join(', ')} · ${hint}`;
+    const q = squads[0]!;
+    const alive = q.alive;
+    const members = alive.length === 1 ? describeUnit(world, alive[0]!) : alive.map((m) => `${m.name} ${percent(m)}`).join(', ');
+    return `${q.name} (${q.spec.role}): ${members || 'none left'} · ${q.status(world.match.time)} · ${hint}`;
   }
   const units = [...world.selected];
   if (!units.length) return 'Tap one of your mechs to select it, or Select all';
@@ -319,7 +358,7 @@ function describeUnit(world: World, u: SeaUnit): string {
   const c = u.combat;
   if (!c) return u.name;
   const parts = [`${u.name} ${percent(u)}`, `${c.weapons.filter((w) => !w.destroyed).length}/${c.weapons.length} weapons`];
-  const ammo = [...c.ammo].map(([id, rounds]) => `${world.ammoName(id)} ${rounds}`).join(', ');
+  const ammo = [...c.ammo].map(([id, rounds]) => `${world.ammoName(id)} ${Math.floor(rounds)}`).join(', ');
   if (ammo) parts.push(ammo);
   if (u.target) parts.push(`${u.attackOrder ? 'attacking' : 'firing at'} ${u.target.name}, ${Math.round(Math.hypot(u.target.x - u.x, u.target.z - u.z))} m`);
   return parts.join(' · ');

@@ -154,7 +154,8 @@ async function main() {
     unitsFile.units.map(async (u) =>
       addUnit(
         await createUnit(
-          { ...u, paint: u.player ? PLAYER_PAINT : paintFromMission(u.colors) },
+          // The viewer draws infantry as it draws vehicles (static props).
+          { ...u, kind: u.kind === 'infantry' ? 'vehicle' : u.kind, paint: u.player ? PLAYER_PAINT : paintFromMission(u.colors) },
           unitsFile,
           info.worldUnitsPerMeter,
         ),

@@ -10,6 +10,8 @@ import { PLAYER_TEAM, bearing, wrapDegrees, type SeaUnit, type World } from './w
 
 type V3 = [number, number, number];
 
+const NOTHING_SEEN: ReadonlySet<SeaUnit> = new Set();
+
 /** Units close to this share of their best range before they stop to fight. */
 const CLOSE_TO = 0.85;
 /** At most this many route searches each combat tick (a long one costs 10-20 ms). */
@@ -18,6 +20,13 @@ const ROUTES_PER_TICK = 2;
 const REROUTE_S = 2;
 /** Seconds a wreck burns. */
 const BURN_S = 40;
+/** An AI unit chases only targets within this of where its squad was sent, metres. */
+const LEASH_M = 180;
+/**
+ * The scenarios' rule (MC2 has none: only gunnery counts): soldiers are hard to hit, power armour less so, and woods
+ * make infantry harder still. Shares of the firer's gunnery.
+ */
+const INFANTRY_HIT = { trooper: 0.5, armoured: 0.7, cover: 0.6 };
 /** Seconds between puffs of a missile's smoke trail. */
 const SMOKE_INTERVAL_S = 0.04;
 /** Flight speeds, metres a second (the original's bolt files); lasers and PPCs are instant. */
@@ -82,6 +91,10 @@ export class Battle {
   onEvent: (text: string, team: number) => void = () => {};
   /** Shots land and show, but do no damage (the battle survey's steady fight). */
   immortal = false;
+  /** Called when a unit is destroyed (a match charges its side tickets). */
+  onDestroyed: (u: SeaUnit) => void = () => {};
+  /** Decide the battle when one side is wiped out (a match decides its own). */
+  judgeOutcome = true;
   private tickIn = 0;
   private routes = 0;
   private readonly rng = new Rng(0x4d433221);
@@ -128,6 +141,11 @@ export class Battle {
     return { shells: this.payloads.length, missiles: this.missiles.length, wrecks: this.wrecks.length };
   }
 
+  /** Enemies a team's units see (as of the last combat tick). */
+  seenBy(team: number): ReadonlySet<SeaUnit> {
+    return this.seen.get(team) ?? NOTHING_SEEN;
+  }
+
   /** Does `a` see `b` (as of the last combat tick)? */
   sees(a: SeaUnit, b: SeaUnit): boolean {
     return this.sight.get(a)?.has(b) ?? false;
@@ -170,7 +188,8 @@ export class Battle {
 
   /** An ordered target, else the one it has while it's still seen and near enough, else the nearest enemy seen. */
   private chooseTarget(u: SeaUnit): void {
-    if (u.attackOrder && !u.attackOrder.alive) u.attackOrder = null;
+    // An attack order on a unit that falls passes to the nearest of its squadmates the side can see.
+    if (u.attackOrder && !u.attackOrder.alive) u.attackOrder = this.nextInSquad(u, u.attackOrder);
     if (u.attackOrder) {
       u.target = u.attackOrder;
       return;
@@ -190,14 +209,24 @@ export class Battle {
     u.target = best;
   }
 
+  private nextInSquad(u: SeaUnit, fallen: SeaUnit): SeaUnit | null {
+    const seen = this.seen.get(u.team);
+    let best: SeaUnit | null = null;
+    for (const m of fallen.squad?.alive ?? []) {
+      if (seen?.has(m) && (!best || Math.hypot(m.x - u.x, m.z - u.z) < Math.hypot(best.x - u.x, best.z - u.z))) best = m;
+    }
+    return best;
+  }
+
   /**
-   * Units under an attack order, and every enemy unit with a target, walk until they are within their best range and see
-   * the target. The player's other mechs hold where they are (or keep to the route they were given) and fire at what
-   * comes into range.
+   * Units under an attack order, and every enemy unit with a target (near where its squad was sent), walk until they are
+   * within their best range and see the target. The player's other units hold where they are (or keep to the route they
+   * were given) and fire at what comes into range.
    */
   private close(u: SeaUnit): void {
     const t = u.target;
-    const hunting = u.attackOrder !== null || u.team !== PLAYER_TEAM;
+    const leashed = !u.leash || !t || Math.hypot(t.x - u.leash.x, t.z - u.leash.z) <= LEASH_M;
+    const hunting = u.attackOrder !== null || (u.team !== PLAYER_TEAM && leashed);
     if (!t || !hunting) {
       if (u.engaging) u.stop();
       return;
@@ -232,7 +261,7 @@ export class Battle {
     for (const w of combat.weapons) {
       if (!combat.ready(w, this.time) || !inRange(w.def.range, d)) continue;
       if (!own && !(w.def.indirect && spotted)) continue;
-      const hit = combat.fire(w, this.time, this.rng);
+      const hit = combat.fire(w, this.time, this.rng, this.hitModifier(t));
       this.launch(u, t, w, hit, d);
     }
   }
@@ -343,10 +372,22 @@ export class Battle {
     if (report.destroyed.length && t.kind === 'mech') this.onEvent(`${t.name} lost its ${report.destroyed.join(' and ')}`, t.team);
   }
 
+  private hitModifier(t: SeaUnit): number {
+    if (t.kind !== 'infantry') return 1;
+    const size = (t.combat?.stats.tonnage ?? 1) <= 1 ? INFANTRY_HIT.trooper : INFANTRY_HIT.armoured;
+    return size * (this.world.grid?.forestAt(t.x, t.z) ? INFANTRY_HIT.cover : 1);
+  }
+
   private destroyed(t: SeaUnit, by: SeaUnit, report: HitReport): void {
     t.die(arcOf(t.x, t.z, t.rotation, by.x, by.z) === 'front');
     this.world.unitDied(t);
+    this.onDestroyed(t);
     for (const u of this.world.units) if (u.target === t) u.target = null;
+    if (t.kind === 'infantry') {
+      // A soldier just falls: a puff of dust where he stood, and no wreck (and no line in the log).
+      this.fx.groundHit([t.x, t.instance.center[1] - 1, t.z], 0.35);
+      return;
+    }
     const at = t.nodePosition('weapon_centertorso') ?? [...t.instance.center];
     this.fx.explosion(at, t.kind === 'mech' ? 1 : 0.75);
     if (report.exploded) this.fx.explosion(at, 0.8);
@@ -357,6 +398,11 @@ export class Battle {
 
   /** Wrecks burn for a while (fiercely at first), and are redrawn as burnt-out hulks once they've fallen. */
   private burn(): void {
+    // A wreck is forgotten once it's burnt out and drawn as a hulk.
+    for (let i = this.wrecks.length - 1; i >= 0; i--) {
+      const w = this.wrecks[i]!;
+      if (w.drawn && this.time - w.since > BURN_S) this.wrecks.splice(i, 1);
+    }
     for (const w of this.wrecks) {
       if (!w.drawn && w.unit.fallen) {
         w.drawn = true;
@@ -370,7 +416,7 @@ export class Battle {
     }
     // Live mechs that have lost much of their armour smoke.
     for (const u of this.world.units) {
-      if (!u.alive || !u.combat || u.combat.integrity > 0.55 || this.time < (this.nextSmoke.get(u) ?? 0)) continue;
+      if (!u.alive || u.hidden || !u.combat || u.combat.integrity > 0.55 || this.time < (this.nextSmoke.get(u) ?? 0)) continue;
       this.nextSmoke.set(u, this.time + 0.35);
       const at = u.nodePosition('smoke_torso') ?? u.nodePosition('joint_torso') ?? [...u.instance.center];
       this.fx.damaged(at, 1.4 - u.combat.integrity);
@@ -379,7 +425,7 @@ export class Battle {
 
   /** Every enemy destroyed, or every one of the player's mechs. */
   private judge(): void {
-    if (this.outcome) return;
+    if (this.outcome || !this.judgeOutcome) return;
     const fighting = this.world.units.filter((u) => u.combat);
     if (!fighting.some((u) => u.team !== PLAYER_TEAM && u.alive)) this.outcome = 'won';
     else if (!fighting.some((u) => u.team === PLAYER_TEAM && u.kind === 'mech' && u.alive)) this.outcome = 'lost';

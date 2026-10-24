@@ -9,7 +9,8 @@
 //   maps/<mission>/move.bin        Uint32 movement-map cells (mclib/move.h MapCell)
 //   maps/<mission>/colormap.webp   pre-lit terrain colour map
 //   maps/<mission>/objects.json    placed buildings, trees, props
-//   maps/<mission>/units.json      mission units and mech animation metadata
+//   maps/<mission>/units.json      mission units, mech animation metadata, and the scenarios' unit types and props
+//   maps/<mission>/combat.json     weapons, ammunition, and each unit type's armour and loadout
 //   models/props/*.glb, models/mechs/*.glb
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -27,6 +28,7 @@ import {
 } from './lib/mission.ts';
 import { ComponentTable, readGunnery, readMechStats, readVehicleStats, type MechStats, type VehicleStats } from './lib/combat-data.ts';
 import { buildModel, TextureLibrary } from './lib/model.ts';
+import { readScenarios, scenarioNeeds } from './lib/scenario.ts';
 import { SourceData } from './lib/srcdata.ts';
 import { decodeTga } from './lib/tga.ts';
 
@@ -144,16 +146,22 @@ json(`${mapDir}/map.json`, {
 
 // --- Models ------------------------------------------------------------------
 
-const models = collectMissionModels(src, mission, extraMechs);
+// The scenarios' units (mechs by their stats file, the rest by object file) and props join the mission's.
+const needs = scenarioNeeds(readScenarios(missionName));
+const scenarioMechs = needs.units.filter((u) => src.has(`objects/${u}.csv`));
+const scenarioObjects = [...needs.units.filter((u) => !scenarioMechs.includes(u)), ...needs.props];
+const models = collectMissionModels(src, mission, [...new Set([...extraMechs, ...scenarioMechs])], scenarioObjects);
 const textures = new TextureLibrary(src, { upscaled, maxSize: Number(values['texture-size']) });
 const modelPath = (spec: ModelSpec) => `models/${spec.kind === 'mech' ? 'mechs' : 'props'}/${spec.key}.glb`;
+// A vehicle keeps its nodes only when it has clips to move them (infantry); otherwise it's one rigid piece.
 const mechMeta: Record<string, unknown> = {};
 let totalBytes = 0;
 
 for (const spec of models.specs.values()) {
   const base = parseAse(src.text(spec.base));
   const clips = spec.clips.map((c) => ({ name: c.clip, ase: parseAse(src.text(c.file)) }));
-  const { glb, stats } = await buildModel({ name: spec.key, base, clips, flatten: spec.kind === 'prop' }, textures);
+  const flatten = spec.kind === 'prop' || (spec.kind === 'vehicle' && !clips.length);
+  const { glb, stats } = await buildModel({ name: spec.key, base, clips, flatten }, textures);
   totalBytes += write(modelPath(spec), glb);
 
   if (spec.kind === 'mech') {
@@ -216,7 +224,9 @@ const units = mission.parts.flatMap((p, i) => {
   const key = models.partModels[i];
   if (!key) return [];
   const info = models.infos.get(p.objectNumber)!;
-  const kind = info.cls === ObjectClass.Mech ? 'mech' : 'vehicle';
+  // A vehicle whose model walks is infantry.
+  const walks = models.specs.get(key)?.clips.some((c) => c.clip === 'walk');
+  const kind = info.cls === ObjectClass.Mech ? 'mech' : walks ? 'infantry' : 'vehicle';
   const profile = mission.profiles.get(p.pilot);
   return [
     {
@@ -224,7 +234,7 @@ const units = mission.parts.flatMap((p, i) => {
       kind,
       name: info.name,
       csv: p.csv,
-      stats: statsFor(kind, p.csv, info.fitName),
+      stats: statsFor(kind === 'mech' ? 'mech' : 'vehicle', p.csv, info.fitName),
       gunnery: (profile && readGunnery(src, profile)) ?? 40,
       x: round(p.x),
       y: round(p.y),
@@ -237,7 +247,32 @@ const units = mission.parts.flatMap((p, i) => {
 });
 const showcase = extraMechs.map((m) => m.toLowerCase()).filter((m) => m in mechMeta);
 for (const m of showcase) statsFor('mech', m, '');
-json(`${mapDir}/units.json`, { mechs: mechMeta, units, showcase });
+// The scenarios' unit types: a mech walks on its gestures; a vehicle whose model walks (has a walk clip) is infantry.
+const types: Record<string, { kind: 'mech' | 'vehicle' | 'infantry'; name: string; model: string; stats: string | null }> = {};
+for (const u of needs.units) {
+  if (scenarioMechs.includes(u)) {
+    const meta = mechMeta[u] as { model: string } | undefined;
+    const stats = statsFor('mech', u, '');
+    if (meta) types[u] = { kind: 'mech', name: (stats && mechStats[stats]?.name) || u, model: meta.model, stats };
+    continue;
+  }
+  const spec = models.specs.get(models.extraModels.get(u) ?? '');
+  if (!spec) continue;
+  const fitName = src.actual(`objects/${u}.fit`)!.split('/').pop()!;
+  types[u] = {
+    kind: spec.clips.some((c) => c.clip === 'walk') ? 'infantry' : 'vehicle',
+    name: src.fit(`objects/${fitName}`).str('ObjectType', 'Name') || u,
+    model: modelPath(spec),
+    stats: statsFor('vehicle', '', fitName),
+  };
+}
+const props = Object.fromEntries(
+  needs.props.flatMap((p) => {
+    const spec = models.specs.get(models.extraModels.get(p) ?? '');
+    return spec ? [[p, modelPath(spec)]] : [];
+  }),
+);
+json(`${mapDir}/units.json`, { mechs: mechMeta, units, showcase, types, props });
 const usedWeapons = new Set([...Object.values(mechStats), ...Object.values(vehicleStats)].flatMap((s) => s.weapons.map((w) => w.id)));
 json(`${mapDir}/combat.json`, {
   weapons: Object.fromEntries([...usedWeapons].map((id) => [id, components.weapons.get(id)])),
