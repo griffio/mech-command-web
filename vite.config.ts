@@ -85,7 +85,7 @@ export default defineConfig(({ mode }) => ({
     target: 'es2022',
     assetsDir: 'static',
     chunkSizeWarningLimit: 1500,
-    // Two pages: the three.js viewer, and the WebGPU sea experiment.
-    rollupOptions: { input: { main: 'index.html', sea: 'sea.html' } },
+    // Two pages: the WebGPU game, and the three.js (WebGL) viewer it falls back to.
+    rollupOptions: { input: { main: 'index.html', viewer: 'viewer.html' } },
   },
 }));

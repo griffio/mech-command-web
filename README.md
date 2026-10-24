@@ -1,9 +1,14 @@
 # Mech Command Web
 
-A browser (desktop and iPad) viewer for MechCommander 2 maps and mechs, built on
-three.js and WebGL2. It is the first step towards a small web skirmish game that
-reuses the original assets. No native code: the original data is converted
-offline into glTF, WebP, PNG and JSON.
+A small MechCommander 2-style skirmish for iPad and desktop browsers, reusing
+the original game's maps, buildings and mechs. No native code: the original
+data is converted offline into glTF, WebP, PNG and JSON.
+
+- **The game** (`index.html`) draws with WebGPU: the FFT sea and physically based
+  sky from the dreadnought game, MC2's terrain, buildings, trees and mechs, and
+  sun shadows. It needs Safari 26 (iPadOS 26 / macOS 26), or a recent Chrome or Edge.
+- **The viewer** (`viewer.html`) is the earlier three.js/WebGL2 version. The game
+  sends any browser without WebGPU there automatically.
 
 ## Quick start
 
@@ -11,12 +16,17 @@ offline into glTF, WebP, PNG and JSON.
 npm install
 npm run fetch-data       # sparse-clones only what mission mc2_01 needs (~46 MB) into vendor/
 npm run convert          # writes public/assets/ (~6 MB)
-npm run dev              # http://localhost:5173 (also served on your LAN for an iPad)
+npm run dev:https        # https://localhost:5173, also on your LAN for an iPad
 ```
+
+WebGPU only exists in secure contexts, so open the HTTPS address on an iPad and
+accept the self-signed certificate once (Show Details → visit this website).
+Plain `npm run dev` works on the Mac itself (localhost counts as secure); from
+another device over HTTP the game falls back to the viewer.
 
 Options (both scripts): `--mission mc2_05` picks another mission, and
 `--extra-mechs atlas,madcat` adds mechs the mission doesn't use (the defaults
-are shown in the viewer's showcase).
+are the showcase mechs that patrol near the start).
 
 ### Upscaled textures
 
@@ -35,70 +45,41 @@ The 5120² colour map is shipped at `--colormap-size 2560` (about 35 MB of GPU
 memory with mipmaps, against about 140 MB at full size). Model textures are capped at
 `--texture-size 512` and stored as WebP inside the GLBs (`EXT_texture_webp`).
 
-Viewer controls: drag to pan, right-drag or two fingers to rotate, scroll or
+## The game (WebGPU)
+
+Controls: drag to pan, right-drag or two fingers to turn and tilt, scroll or
 pinch to zoom, tap a unit to select it, and tap the ground to walk the selected
-mech there. The panel switches animations, toggles run/patrol, spawns mechs,
-hides layers and toggles shadows. Add `?map=<mission>` to the URL to choose a
-converted map.
+mech there.
 
-Shadows come from a 2048² sun shadow map that follows the view centre and grows
-as you zoom out. Buildings, trees and units cast them. The ground stays unlit, and
-a transparent shadow-only copy of it shows them. The terrain doesn't cast, because
-its own shadows are already baked into the colour map.
+The sea, sky, surf and post-processing come from the dreadnought game; see
+`src/sea/README.md` for what was taken and what changed. MC2's land wears its
+pre-lit colour map, and the sea shows the sea floor through shallow water. Every
+model is one vertex buffer whose vertices name the node they move with, so all
+the mechs of one type are a single instanced draw. The sun's shadows fade out as
+the camera zooms out (700–1000 m).
 
-## Perf test on a device
+**Run sea survey** (top left) measures what the sea, land, buildings, units,
+shadows, sky, bloom and resolution each cost per frame. It uses two fixed views:
+the opening view, and the whole map zoomed out (mostly sea). It renders several
+frames per display refresh, until one interval spans at least six refreshes, so
+the 60 fps cap can't hide the cost; each row is a range accurate to about a
+sixth. The report is POSTed to `/api/perf` and saved in `perf-reports/`. URL
+options: `q=B` for 128² waves instead of 256², `msaa=1`, and `scale=` for a
+fixed render scale.
 
-1. On the Mac, run `npm run dev` (HTTP) or `npm run dev:https` (HTTPS with a
-   self-signed certificate).
-2. On the iPad, open the **Network** URL Vite prints (same Wi-Fi). Over HTTPS,
-   accept the certificate warning: Show Details → visit this website.
-3. Enter a device name, tap **Run perf test**, and leave the iPad alone for about a minute.
+On an iPad Air M2 the opening view costs 3.0–3.5 ms per frame and the whole map
+zoomed out 10.0–10.6 ms, against 16.7 ms at 60 fps.
 
-The test measures the display refresh rate, then seven scenes for 5 seconds each:
+## The viewer (WebGL)
 
-| Scene | Description |
-|---|---|
-| `start` | opening view |
-| `start-no-shadows` | opening view without shadows |
-| `start-pixel-ratio-1` | opening view at one render pixel per screen point (the fill-rate check) |
-| `airfield` | close over the airfield buildings |
-| `overview` | zoomed out over the whole map |
-| `mech-close` | following a walking Atlas |
-| `crowd-24` | opening view plus 24 extra walking mechs |
+Controls as above. Its panel switches animations, toggles run/patrol, spawns
+mechs, hides layers and toggles shadows. Add `?map=<mission>` to the URL of either
+page to choose a converted map.
 
-The results appear on screen, are POSTed as JSON to `/api/perf`, and are saved in
-`perf-reports/` on the Mac. Each scene records fps, median/p95/p99/max frame time,
-JavaScript time per frame, draw calls and triangles. The report also includes load
-milestones, WebGL limits and compressed-texture formats, and the WebGPU adapter's
-features and limits. WebGPU needs a secure context, so that part is only filled in
-over HTTPS.
-
-How to read it:
-- Low fps with low JS time means the GPU is the limit.
-- If `start-pixel-ratio-1` is much faster than `start`, the limit is screen resolution (fill rate).
-
-## Sea experiment (branch `ocean-experiment`)
-
-`sea.html` draws the same map with the WebGPU sea and sky from the dreadnought
-game: three FFT wave cascades, foam and glitter, surf along the coast, the sea
-floor showing through shallow water, and an atmosphere with clouds. MC2's
-buildings, trees, mechs and vehicles stand on it with sun shadows. Tap a unit to
-select it, and tap the ground to walk it there. See `src/sea/README.md` for where
-the code comes from.
-
-```bash
-npm run dev:https    # then open https://<Mac address>:5173/sea.html (WebGPU needs HTTPS)
-```
-
-Its **Run sea survey** button measures what the sea, land, buildings, units,
-shadows, sky, bloom and resolution each cost per frame. It measures from two
-fixed views, the opening view and the whole map zoomed out (mostly sea), so runs
-can be compared. Each row is a range accurate to about a sixth: the display
-rounds every interval up to whole refreshes, so the survey renders enough frames
-per refresh that one interval spans at least six. It renders several frames per display refresh
-until the GPU saturates, so the 60 fps cap can't hide the cost. The report is
-POSTed to the same `/api/perf` endpoint. URL options: `q=B` for 128² waves
-instead of 256², `msaa=1`, and `scale=` for a fixed render scale.
+Its **Run perf test** button measures seven scenes (opening view with and without
+shadows and at half resolution, the airfield, the whole map, a walking Atlas up
+close, 24 extra walking mechs), plus load milestones, WebGL limits and the WebGPU
+adapter's features. The report goes to the same `/api/perf` endpoint.
 
 ## Layout
 
@@ -107,14 +88,14 @@ instead of 256², `msaa=1`, and `scale=` for a fixed render scale.
 | `tools/fetch-srcdata.ts` | Sparse, blobless checkout of [alariq/mc2srcdata](https://github.com/alariq/mc2srcdata), resolving the files a mission needs |
 | `tools/convert.ts` | Mission → `public/assets/maps/<mission>/` and `public/assets/models/` |
 | `tools/lib/` | Readers for `.pak`, `.fit`, `.tga`, `.ase` and remote zips, plus the glTF builder |
-| `src/` | The three.js viewer |
+| `src/sea/` | The WebGPU game (`main.ts`, `app/`, `models/`, `render/`, `sim/`) |
+| `src/*.ts` | The three.js viewer; `src/paint.ts` and `src/assets.ts` are shared |
 | `vendor/`, `public/assets/` | Downloaded and generated data; git-ignored |
 
 Converted output per mission: `map.json` (terrain size, water, light, camera
 start), `elevation.bin` (Float32 heights), `colormap.webp`, `objects.json`
 (about 1,000 placed buildings and trees), `units.json` (mission units plus
-gesture speeds), and `move.bin` (the 300×300 movement grid, kept for later
-pathfinding).
+gesture speeds), and `move.bin` (the 300×300 movement grid).
 
 ## How the conversion follows the engine
 
@@ -153,8 +134,8 @@ Checks done against mc2_01:
   nav markers, infantry, the outhouse). The converter skips them and lists them.
 - Vehicles are static, and prop animations (flags, radar) are not converted.
 - The original 1280² colour map is blurry close up; use `--upscaled`.
-- Not yet measured on a real iPad. Headless WebKit on an Intel Mac renders even a
-  near-empty scene at ~15 fps, so it can't stand in for one.
+- Headless browsers on an Intel Mac can't stand in for an iPad when timing (they
+  render even a near-empty scene at ~15 fps); measure on the device.
 
 ## Licence
 

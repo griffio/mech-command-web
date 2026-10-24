@@ -172,3 +172,11 @@ pre#perf-status {
 #selection:empty {
   display: none;
 }
+
+#fallback:empty {
+  display: none;
+}
+
+#fallback {
+  color: #ffd27a;
+}

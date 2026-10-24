@@ -1,9 +1,9 @@
-# Sea experiment (WebGPU)
+# The WebGPU game
 
 The MC2 map on the sea and sky of the dreadnought game ("Fall of Shot",
-github.com/griffio/dreadnought-game). Served as `sea.html`; the three.js
-viewer (`index.html`) is untouched. WebGPU needs a secure context, so open it
-over `npm run dev:https` from another device.
+github.com/griffio/dreadnought-game). Served as `index.html`; browsers without
+WebGPU are sent to the three.js viewer (`viewer.html`). WebGPU needs a secure
+context, so open it over `npm run dev:https` from another device.
 
 ## Where the code comes from
 

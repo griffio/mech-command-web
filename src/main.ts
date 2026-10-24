@@ -38,6 +38,13 @@ import { Terrain } from './terrain.ts';
 import { createUnit, type Unit } from './units.ts';
 
 const status = document.getElementById('status')!;
+const fallbackReason = new URLSearchParams(location.search).get('fallback');
+if (fallbackReason) {
+  document.getElementById('fallback')!.textContent =
+    fallbackReason === 'insecure-context'
+      ? 'WebGPU needs HTTPS: this is the WebGL viewer. For the full game run npm run dev:https and open the https:// address.'
+      : 'This browser has no WebGPU, so this is the WebGL viewer (the full game needs Safari 26, or a recent Chrome or Edge).';
+}
 const stats = document.getElementById('stats')!;
 const setStatus = (text: string) => (status.textContent = text);
 

@@ -41,7 +41,8 @@ async function main() {
     setStatus(`The GPU device was lost (${reason}). Reload the page.`);
   });
   if (!init.ok) {
-    setStatus(init.reason === 'insecure-context' ? `${init.message} Start the dev server with npm run dev:https.` : init.message);
+    // No WebGPU here (an older browser, or plain HTTP from another device): the WebGL viewer shows the same map.
+    location.replace(`viewer.html?fallback=${encodeURIComponent(init.reason)}`);
     return;
   }
   const { gpu } = init;
