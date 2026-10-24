@@ -81,15 +81,17 @@ How to read it:
 
 `sea.html` draws the same map with the WebGPU sea and sky from the dreadnought
 game: three FFT wave cascades, foam and glitter, surf along the coast, the sea
-floor showing through shallow water, and an atmosphere with clouds. Buildings
-and mechs aren't on it yet. See `src/sea/README.md` for where the code comes from.
+floor showing through shallow water, and an atmosphere with clouds. MC2's
+buildings, trees, mechs and vehicles stand on it with sun shadows. Tap a unit to
+select it, and tap the ground to walk it there. See `src/sea/README.md` for where
+the code comes from.
 
 ```bash
 npm run dev:https    # then open https://<Mac address>:5173/sea.html (WebGPU needs HTTPS)
 ```
 
-Its **Run sea survey** button measures what the sea, land, sky, bloom and
-resolution each cost per frame. It renders several frames per display refresh
+Its **Run sea survey** button measures what the sea, land, buildings, units,
+shadows, sky, bloom and resolution each cost per frame. It renders several frames per display refresh
 until the GPU saturates, so the 60 fps cap can't hide the cost. The report is
 POSTed to the same `/api/perf` endpoint. URL options: `q=B` for 128² waves
 instead of 256², `msaa=1`, and `scale=` for a fixed render scale.

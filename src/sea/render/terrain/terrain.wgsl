@@ -1,7 +1,7 @@
 // The land: tiled heightfield meshes, one draw per visible tile. Positions are tile-local; the tile's camera-relative origin
 // comes from a storage buffer indexed by the instance, so a whole island is a handful of draws and a float32 position never
 // has to hold a coordinate in kilometres.
-//   Requires common, scene, sky_map, env, noise, haze, map. Group 2 = tile origins, group 3 = the map's ground.
+//   Requires common, scene, sky_map, env, noise, haze, shadow, map. Group 2 = tile origins, group 3 = shadow + the map's ground.
 const EARTH_R: f32 = 6371000.0;
 
 @group(2) @binding(0) var<storage, read> tiles: array<vec4<f32>>;
@@ -42,6 +42,13 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
   col *= 0.94 + 0.12 * noise_lookup(p * 0.35);
   // Wet sand at the waterline.
   col *= mix(0.72, 1.0, smoothstep(0.0, 1.2, in.world.y));
+  // The shadows of buildings, trees and units: the colour map was lit by the sun, so take away the share of the light the
+  // sun gave this slope where something stands in its way.
+  let n = normalize(in.nrm);
+  let sun_light = scene.sun_irr.rgb * (saturate(dot(n, scene.sun_dir.xyz)) / PI);
+  let amb_light = scene.ambient.rgb * 1.15;
+  let lit = shadow_factor_fast(in.rel, n);
+  col *= (amb_light + sun_light * lit) / max(amb_light + sun_light, vec3<f32>(1e-4));
   col = apply_haze(col, in.rel);
   return vec4<f32>(col, 1.0);
 }

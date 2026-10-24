@@ -1,5 +1,5 @@
-// The MC2 map on the dreadnought game's WebGPU sea and sky (the ocean-experiment branch). For now just the
-// ground, the sea, the surf and the sky; buildings and mechs come once the cost on the iPad is known.
+// The MC2 map on the dreadnought game's WebGPU sea and sky (the ocean-experiment branch): the ground, the sea and
+// its surf, the sky, and MC2's buildings, trees, mechs and vehicles with the sun's shadows.
 //
 // MC2 world units become metres (5.01 units a metre); the sea level is the mission's water elevation. Axes
 // follow the dreadnought game: x east, y up, z south (north is -z), which is also what the three.js viewer uses.
@@ -16,11 +16,13 @@ import { DEFAULT_SEA, SeaRenderer, type SeaQuality } from './render/sea-renderer
 import { SurfLines } from './sim/terrain/surf';
 import { Terrain } from './sim/terrain/terrain';
 import { mc2TerrainGrid, upsampleGrid } from './app/mc2-map';
+import { World } from './app/world';
 
 /** The dreadnought game's pixel budget: a Retina iPad canvas is about 5.6 MP, more than the sea needs. */
 const MAX_PIXELS = 3_600_000;
 
 const status = document.getElementById('status')!;
+const selection = document.getElementById('selection')!;
 const stats = document.getElementById('stats')!;
 const setStatus = (text: string) => (status.textContent = text);
 
@@ -87,6 +89,7 @@ async function main() {
   setStatus('Building the sea…');
   const sea = await SeaRenderer.create(gpu, canvas, quality, { ...DEFAULT_SEA, ...sun });
   sea.setMap(terrain, ground, surf);
+  const world = await World.load(sea, terrain, info, dir, setStatus);
 
   const camera = new Camera();
   camera.fovYDeg = 40;
@@ -98,6 +101,21 @@ async function main() {
     { minDistance: 40, maxDistance: 2400, minPitchDeg: 8, maxPitchDeg: 88, halfExtent: (grid.nx / 2) * grid.cell },
   );
   controls.groundAt = (x, z) => terrain.heightAt(x, z);
+
+  // Tap a unit to select it; tap the ground to send the selected mech there.
+  let down: { x: number; y: number; t: number } | null = null;
+  canvas.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY, t: performance.now() }));
+  canvas.addEventListener('pointerup', (e) => {
+    if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 8 || performance.now() - down.t > 400) return;
+    const rect = canvas.getBoundingClientRect();
+    const hit = world.pick(camera, ((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    if (!hit) return;
+    if (Array.isArray(hit)) {
+      if (world.selected?.kind === 'mech') world.selected.walkTo([hit]);
+    } else {
+      world.select(hit);
+    }
+  });
 
   const sizer = new CanvasSizer(canvas, gpu.device.limits.maxTextureDimension2D, (w, h) => sea.resize(w, h), MAX_PIXELS);
   if (fixedScale !== null) sizer.renderScale = fixedScale;
@@ -113,6 +131,7 @@ async function main() {
     canvas: `${sizer.width}x${sizer.height}`,
     land: sea.landStats,
     oceanDrawnFraction: Math.round(sea.oceanArc.drawnFraction * 100) / 100,
+    objects: { props: world.propCount, units: world.units.length, drawn: sea.models.drawnInstances, shadowCasters: sea.models.shadowInstances },
   }), () => {
     if (fixedScale === null) sizer.renderScale = scaler.scale;
   });
@@ -128,6 +147,10 @@ async function main() {
     last = now;
     controls.update();
     camera.update(canvas.clientWidth / Math.max(canvas.clientHeight, 1));
+    world.update(dt);
+    // The shadow map covers what the camera looks at, growing in 25% steps as it zooms out (so it doesn't shimmer).
+    const reach = Math.min(Math.max(controls.distance * 1.1, 120), 1300);
+    sea.shadowFocus = { x: controls.target[0], z: controls.target[2], half: 1.25 ** Math.ceil(Math.log(reach) / Math.log(1.25)) };
     // Normally one frame per refresh; the survey renders several to saturate the GPU and expose real cost.
     const repeats = survey.repeats;
     const encodeStart = performance.now();
@@ -146,14 +169,17 @@ async function main() {
       stats.textContent =
         `${fps.toFixed(0)} fps · ${sizer.width}×${sizer.height} (scale ${sizer.renderScale.toFixed(2)}) · ` +
         `JS ${cpuMs.toFixed(1)} ms${gpuMs ? ` · GPU ~${gpuMs.toFixed(1)} ms` : ''} · ocean ${quality.oceanSize}² · ` +
-        `${Math.round(sea.oceanArc.drawnFraction * 100)}% of the sea grid · land ${sea.landStats.tiles} tiles`;
+        `${Math.round(sea.oceanArc.drawnFraction * 100)}% of the sea grid · land ${sea.landStats.tiles} tiles · ` +
+        `${sea.models.drawnInstances} objects drawn, ${sea.models.shadowInstances} casting shadows`;
+      const sel = world.selected;
+      selection.textContent = sel ? `Selected: ${sel.name} (${sel.kind})${sel.kind === 'mech' ? ' · tap the ground to walk there' : ''}` : '';
       fpsFrames = 0;
       fpsSince = now;
     }
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
-  Object.assign(window, { sea: { sea, camera, controls, terrain, sizer, survey } });
+  Object.assign(window, { sea: { sea, camera, controls, terrain, sizer, survey, world } });
 }
 
 /** The panel's button runs the survey and POSTs the report to the dev server (see vite.config.ts). */

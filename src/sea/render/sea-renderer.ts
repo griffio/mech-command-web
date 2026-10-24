@@ -14,7 +14,8 @@ import { OCEAN_LOOP_SECONDS, OceanField, type FoamSettings } from './ocean/ocean
 import { OceanSurface } from './ocean/ocean-surface';
 import { PostProcess } from './post/post';
 import { SCENE_BYTES, SCENE_AMBIENT_BYTE_OFFSET, SCENE_UPLOAD_FLOATS, SLOT, SceneBlock } from './scene-block';
-import { ShadowMap } from './ships/shadow-map';
+import { ModelRenderer } from './models/model-renderer';
+import { ShadowMap, sunShadowMatrix } from './ships/shadow-map';
 import { Atmosphere } from './sky/atmosphere';
 import { TerrainRenderer } from './terrain/terrain-renderer';
 import { SurfLines } from '../sim/terrain/surf';
@@ -68,8 +69,8 @@ const BASE_EXPOSURE = 3.2;
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 const DEPTH_FORMAT: GPUTextureFormat = 'depth32float';
 const FOAM: FoamSettings = { bias: 0.92, gains: [1.2, 2.2, 0.9], persistence: 3.0 };
-/** Nothing casts a sun shadow yet; the sea's shader still binds a (small) shadow map. */
-const SHADOW_SIZE = 256;
+/** The sun's shadow map: buildings, trees and units cast into it; the land, the sea and the models receive it. */
+const SHADOW_SIZE = 2048;
 
 /** Something that leaves a wake: its path history, hull shape and current state. */
 export interface WakeSource {
@@ -81,6 +82,9 @@ export interface WakeSource {
 
 /** Switches for measuring what each feature costs (the performance survey flips these). */
 export interface SeaDebugFlags {
+  skipProps: boolean;
+  skipUnits: boolean;
+  skipShadows: boolean;
   skipBloom: boolean;
   freezeOcean: boolean;
   skipOceanDraw: boolean;
@@ -106,7 +110,15 @@ export class SeaRenderer {
   time = 0;
   /** Pins the sea and clouds at one moment (screenshots, comparisons). */
   frozenTime: number | null = null;
+  /**
+   * Where the sun's shadow map is centred (world x, z) and how far it reaches either side (metres); the app sets it each
+   * frame from what the camera looks at. Null: no shadows.
+   */
+  shadowFocus: { x: number; z: number; half: number } | null = null;
   readonly debug: SeaDebugFlags = {
+    skipProps: false,
+    skipUnits: false,
+    skipShadows: false,
     skipBloom: false,
     freezeOcean: false,
     skipOceanDraw: false,
@@ -135,6 +147,7 @@ export class SeaRenderer {
   private readonly wakeSources: WakeSource[] = [];
   private readonly wakeSink: VertexSink;
   private surf: SurfLines | null = null;
+  private readonly shadowMatrix = new Float32Array(16);
 
   private constructor(
     private readonly gpu: GpuContext,
@@ -146,6 +159,9 @@ export class SeaRenderer {
     private readonly post: PostProcess,
     private readonly wake: WakeRibbons,
     private readonly land: TerrainRenderer,
+    /** MC2's buildings, trees, mechs and vehicles. */
+    readonly models: ModelRenderer,
+    private readonly shadow: ShadowMap,
     sceneBuffer: GPUBuffer,
     params: SeaParams,
   ) {
@@ -178,9 +194,10 @@ export class SeaRenderer {
       ...targets,
     });
     const wake = await WakeRibbons.create({ device, sceneBuffer, field, ...env, ...targets });
-    const land = await TerrainRenderer.create({ device, sceneBuffer, ...env, ...targets });
+    const land = await TerrainRenderer.create({ device, sceneBuffer, shadow, ...env, ...targets });
+    const models = await ModelRenderer.create({ device, sceneBuffer, skyView: atmosphere.skyView, envSampler: atmosphere.envSampler, shadow, ...targets });
     const post = await PostProcess.create(device, gpu.canvasFormat);
-    const renderer = new SeaRenderer(gpu, canvas, quality, atmosphere, field, surface, post, wake, land, sceneBuffer, { ...params });
+    const renderer = new SeaRenderer(gpu, canvas, quality, atmosphere, field, surface, post, wake, land, models, shadow, sceneBuffer, { ...params });
     renderer.regenerateSea();
     return renderer;
   }
@@ -290,7 +307,20 @@ export class SeaRenderer {
     s.vec4(SLOT.cloud, p.cloudCover, p.cloudAltitudeM, Math.sin(heading) * drift, -Math.cos(heading) * drift);
     s.vec4(SLOT.cloudSun, ...this.cloudSun, 0);
     s.vec4(SLOT.atmo, Math.sin(e), 1, 0, 0);
-    s.vec4(SLOT.shadow, 0, 1 / SHADOW_SIZE, 0, 0);
+
+    // The sun's shadow, framed on what the camera looks at. The depth range covers the land's heights and whatever stands
+    // on it across the box, seen slantwise along the sun.
+    const focus = this.shadowFocus;
+    const shadowOn = focus !== null && !this.debug.skipShadows && sunDir[1] > 0.02;
+    if (shadowOn) {
+      const depthHalf = focus.half * 1.2 + 100;
+      sunShadowMatrix(sunDir, [focus.x, 0, focus.z], camera.position, focus.half, depthHalf, SHADOW_SIZE, this.shadowMatrix);
+      s.mat4(SLOT.shadowViewProj, this.shadowMatrix);
+      const texelWorld = (2 * focus.half) / SHADOW_SIZE;
+      s.vec4(SLOT.shadow, 1, 1 / SHADOW_SIZE, texelWorld * 2.5, 0.4 / (2 * depthHalf));
+    } else {
+      s.vec4(SLOT.shadow, 0, 1 / SHADOW_SIZE, 0, 0);
+    }
 
     // Wakes and surf: rebuilt every frame, relative to the camera.
     const sink = this.wakeSink;
@@ -312,6 +342,9 @@ export class SeaRenderer {
 
     device.queue.writeBuffer(this.sceneBuffer, 0, s.data, 0, SCENE_UPLOAD_FLOATS);
     this.land.update(camera);
+    // Casters within reach of the shadow box: it is tilted along the sun, so things up-sun of it can still throw shade in.
+    const reach = shadowOn ? { x: focus.x, z: focus.z, reach: focus.half * 1.45 + 80 } : null;
+    this.models.update(camera, reach, !this.debug.skipUnits, !this.debug.skipProps);
 
     // The sea's grid is drawn only where the camera can see it.
     const hs = this.estimateHs();
@@ -335,6 +368,17 @@ export class SeaRenderer {
     }
     encoder.copyBufferToBuffer(this.atmosphere.ambientBuffer, 0, this.sceneBuffer, SCENE_AMBIENT_BYTE_OFFSET, 16);
 
+    if (shadowOn) {
+      const shadowPass = encoder.beginRenderPass({
+        label: 'sun-shadow',
+        colorAttachments: [],
+        timestampWrites: this.timer?.render('shadow'),
+        depthStencilAttachment: { view: this.shadow.view, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
+      });
+      this.models.drawShadow(shadowPass);
+      shadowPass.end();
+    }
+
     const hdrView = this.post.hdrView;
     const msaa = this.msaaColor;
     const pass = encoder.beginRenderPass({
@@ -354,7 +398,8 @@ export class SeaRenderer {
     if (!this.debug.skipSkyDraw) this.atmosphere.drawSky(pass);
     if (!this.debug.skipOceanDraw) this.surface.draw(pass);
     if (!this.debug.skipTerrain) this.land.draw(pass);
-    // Foam is blended over the sea after everything solid, tested against the land's depth.
+    this.models.draw(pass);
+    // Foam is blended over the sea after everything solid, tested against the land's and the models' depth.
     this.wake.draw(pass);
     pass.end();
 

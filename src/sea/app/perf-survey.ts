@@ -38,6 +38,10 @@ const STEPS: Step[] = [
   { name: 'no ocean surface drawn', scale: 1, flags: { skipOceanDraw: true } },
   { name: 'no land drawn', scale: 1, flags: { skipTerrain: true } },
   { name: 'baseline (middle)', scale: 1, flags: {} },
+  { name: 'no buildings or trees', scale: 1, flags: { skipProps: true } },
+  { name: 'no units', scale: 1, flags: { skipUnits: true } },
+  { name: 'no sun shadows', scale: 1, flags: { skipShadows: true } },
+  { name: 'baseline (late)', scale: 1, flags: {} },
   { name: 'no sky drawn', scale: 1, flags: { skipSkyDraw: true } },
   { name: 'no cloud/ambient refresh', scale: 1, flags: { skipClouds: true } },
   { name: 'no bloom', scale: 1, flags: { skipBloom: true } },
@@ -46,7 +50,7 @@ const STEPS: Step[] = [
   {
     name: 'floor: sky + composite only',
     scale: 1,
-    flags: { skipOceanDraw: true, freezeOcean: true, skipBloom: true, skipClouds: true, skipTerrain: true },
+    flags: { skipOceanDraw: true, freezeOcean: true, skipBloom: true, skipClouds: true, skipTerrain: true, skipProps: true, skipUnits: true, skipShadows: true },
   },
   { name: 'baseline (repeat, thermal check)', scale: 1, flags: {} },
 ];

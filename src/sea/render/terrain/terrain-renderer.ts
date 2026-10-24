@@ -9,11 +9,15 @@ import scene from '../shaders/scene.wgsl?raw';
 import skyMap from '../shaders/sky_map.wgsl?raw';
 import mapWgsl from '../map/map.wgsl?raw';
 import type { MapGround } from '../map/map-ground';
+import shadowChunk from '../shaders/shadow.wgsl?raw';
+import type { ShadowMap } from '../ships/shadow-map';
 import terrainWgsl from './terrain.wgsl?raw';
 import { buildTerrainMesh, lodForDistance, TERRAIN_FLOATS_PER_VERTEX, type TerrainMesh, type TerrainTile } from './tiles';
 
 export interface TerrainRendererOptions {
   device: GPUDevice;
+  /** The sun's shadow map, which the land receives the buildings' and units' shadows from. */
+  shadow: ShadowMap;
   sceneBuffer: GPUBuffer;
   skyView: GPUTexture;
   envSampler: GPUSampler;
@@ -52,11 +56,12 @@ export class TerrainRenderer {
     private readonly pipeline: GPURenderPipeline,
     private readonly sceneGroup: GPUBindGroup,
     private readonly envGroup: GPUBindGroup,
+    private readonly shadow: ShadowMap,
   ) {}
 
   static async create(opts: TerrainRendererOptions): Promise<TerrainRenderer> {
     const { device } = opts;
-    const module = await createModule(device, 'terrain', common, scene, skyMap, env, noiseChunk, haze, mapWgsl, terrainWgsl);
+    const module = await createModule(device, 'terrain', common, scene, skyMap, env, noiseChunk, haze, shadowChunk, mapWgsl, terrainWgsl);
     const pipeline = device.createRenderPipeline({
       label: 'terrain',
       layout: 'auto',
@@ -91,7 +96,7 @@ export class TerrainRenderer {
         { binding: 4, resource: opts.noiseSampler },
       ],
     });
-    return new TerrainRenderer(device, pipeline, sceneGroup, envGroup);
+    return new TerrainRenderer(device, pipeline, sceneGroup, envGroup, opts.shadow);
   }
 
   /** Build the meshes for a terrain and upload them (or clear them with null). */
@@ -122,7 +127,10 @@ export class TerrainRenderer {
 
   /** The colour map and detail texture the land is drawn with (group 3, see map.wgsl). */
   setMap(map: MapGround): void {
-    this.groundGroup = this.device.createBindGroup({ layout: this.pipeline.getBindGroupLayout(3), entries: map.entries(false) });
+    this.groundGroup = this.device.createBindGroup({
+      layout: this.pipeline.getBindGroupLayout(3),
+      entries: [{ binding: 0, resource: this.shadow.view }, { binding: 1, resource: this.shadow.sampler }, ...map.entries(false)],
+    });
   }
 
   get tileCount(): number {

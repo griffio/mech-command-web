@@ -168,3 +168,7 @@ pre#perf-status {
 .perf-running #sea {
   pointer-events: none;
 }
+
+#selection:empty {
+  display: none;
+}

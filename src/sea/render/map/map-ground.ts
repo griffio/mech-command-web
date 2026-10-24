@@ -1,3 +1,5 @@
+import { uploadWithMips } from '../texture-upload';
+
 // GPU resources for the MC2 map's ground (see map.wgsl): heights in metres, the pre-lit colour map with
 // mipmaps, the detail texture, and their parameters. The sea reads them to show the sea floor through
 // shallow water; the land draws the colour map.
@@ -114,33 +116,6 @@ export class MapGround {
       { binding: 6, resource: this.sampler },
     ];
   }
-}
-
-/** Upload a picture with every mip level made by halving it on a canvas. */
-function uploadWithMips(device: GPUDevice, label: string, image: ImageBitmap, format: GPUTextureFormat): GPUTexture {
-  const size = Math.max(image.width, image.height);
-  const mips = Math.floor(Math.log2(size)) + 1;
-  const texture = device.createTexture({
-    label,
-    size: [image.width, image.height],
-    format,
-    mipLevelCount: mips,
-    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-  });
-  device.queue.copyExternalImageToTexture({ source: image }, { texture, mipLevel: 0 }, [image.width, image.height]);
-  let previous: ImageBitmap | OffscreenCanvas = image;
-  for (let level = 1; level < mips; level++) {
-    const w = Math.max(image.width >> level, 1);
-    const h = Math.max(image.height >> level, 1);
-    const canvas = new OffscreenCanvas(w, h);
-    const g = canvas.getContext('2d')!;
-    g.imageSmoothingEnabled = true;
-    g.imageSmoothingQuality = 'high';
-    g.drawImage(previous, 0, 0, w, h);
-    device.queue.copyExternalImageToTexture({ source: canvas }, { texture, mipLevel: level }, [w, h]);
-    previous = canvas;
-  }
-  return texture;
 }
 
 /** A 1x1 texture of one grey `value` (128 is the detail texture's neutral). */
