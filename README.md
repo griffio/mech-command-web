@@ -1,8 +1,11 @@
 # Mech Command Web
 
-A small MechCommander 2-style skirmish for iPad and desktop browsers, reusing
-the original game's maps, buildings, mechs and voices. No native code: the original
-data is converted offline into glTF, WebP, PNG and JSON.
+A small real-time tactics game for iPad and desktop browsers, built from
+MechCommander 2's maps, buildings, mechs, vehicles, infantry, voices and music.
+You command squads of mechs, infantry and a supply truck in an Advance and
+Secure match after the game *Squad*: take the capture points in order, fly
+infantry in to hold them, and build forward bases to fight from. No native
+code: the original data is converted offline into glTF, WebP, PNG, JSON and AAC.
 
 - **The game** (`index.html`) draws with WebGPU: the FFT sea and physically based
   sky from the dreadnought game, MC2's terrain, buildings, trees and mechs, and
@@ -10,14 +13,16 @@ data is converted offline into glTF, WebP, PNG and JSON.
 - **The viewer** (`viewer.html`) is the earlier three.js/WebGL2 version. The game
   sends any browser without WebGPU there automatically.
 
-![The player's lance against the mission's vehicles: LRM volleys, lasers and PPCs](docs/screenshots/battle.jpg)
+![Alpha lance's lasers on a Liao lance among the airfield's buildings, with the match's HUD: tickets and capture points along the top, squad cards and orders along the bottom](docs/screenshots/match.jpg)
 
 | | |
 |---|---|
-| ![The lance on the first island](docs/screenshots/lance.jpg) | ![The lance by the airfield](docs/screenshots/airfield.jpg) |
-| ![The mission's islands from above](docs/screenshots/overview.jpg) | ![After the battle: burning wrecks](docs/screenshots/aftermath.jpg) |
+| ![The fight for the Isthmus, with a Karnov coming in to land](docs/screenshots/isthmus.jpg) | ![The Karnov setting Charlie's riflemen down by the Isthmus](docs/screenshots/airlift.jpg) |
+| ![Charlie's riflemen and Delta's Elementals dug in behind sandbags](docs/screenshots/dug-in.jpg) | ![A forward base: HQ tent, sandbags, autocannon turret, and the supply truck that built it](docs/screenshots/forward-base.jpg) |
+| ![Build FOB: red rings show where a forward base can't go](docs/screenshots/build-fob.jpg) | ![The islands from above: five capture points from your base (bottom right) to theirs](docs/screenshots/overview.jpg) |
 
-Screenshots are from headless Chrome on a Mac, at full render scale.
+Screenshots are from headless Chrome on a Mac, at full render scale, most of
+them with both sides played by the AI.
 
 ## Quick start
 
@@ -78,13 +83,15 @@ long-press (or shift-click) to add one to the selection or take it out, or use
 **Select all**; tap the ground to send the selection there, or an enemy to attack
 it. A second tap on a selected squad's card looks at it, and a tap on a point in
 the top bar looks at the point. **Stop** halts them (and drops an attack order)
-and **Run** makes mechs run.
+and **Run** makes mechs run. **Airlift** and **Build FOB** appear when the
+selection has infantry or a supply truck: press one, then tap the ground.
+**Music** and **Sound** (top right) turn each on or off.
 
 ### Advance and Secure
 
 The game plays a scenario (`scenarios/*.json`, chosen by map), modelled on the
 game *Squad*. You command squads in real time: two lances of mechs, a rifle
-squad and a squad of Elementals (power armour). The Liao garrison has two
+squad, a squad of Elementals (power armour) and a supply truck. The Liao garrison has two
 lances, an armour squad, LRM carriers, riflemen and Elementals, run by a simple
 AI commander.
 
@@ -159,15 +166,15 @@ one it must keep with the rest, stands its LRM carriers off behind the attack,
 flies its infantry to far or cut-off points, and pulls badly hurt squads back to
 reinforce. Played against itself, a match
 runs about 12 minutes and goes either way. `?scenario=none` shows the mission's
-own units instead, and `?speed=4` runs the world four times as fast (for
-testing).
+own units instead (your lance is then its three mechs plus an Atlas and a
+Madcat), and `?speed=4` runs the world four times as fast (for testing).
 
-Your lance is the mission's three mechs plus the Atlas and Madcat. Orders are
-routed over MC2's movement map (`src/sea/sim/move-grid.ts`): A* over its
+Orders are routed over MC2's movement map (`src/sea/sim/move-grid.ts`): A* over its
 300×300 cells of 8.5 m with the engine's rules (no off-map cells or deep water,
 shallow water and passable ground only, forest about 2.8× the cost of clear
 ground), then pulled tight so routes only turn where something is in the way. A
-group's mechs take formation slots about the point, nearest mech to the middle.
+squad's members take formation slots about the point, the nearest in the middle,
+and squads sent together spread out side by side.
 
 ### Combat
 
@@ -316,8 +323,9 @@ Checks done against mc2_01:
 
 ## Known gaps
 
-- `alariq/mc2srcdata` has no models for some objects (a few rocks, mech wreck pieces,
-  nav markers, infantry, the outhouse). The converter skips them and lists them.
+- `alariq/mc2srcdata` lacks a few objects' models (some rocks, mech wreck pieces, nav
+  markers). The converter skips any it can't find and lists them; mc2_01 and its
+  scenario need none of them.
 - Vehicles drive, but their turrets don't turn: the converter flattens each
   vehicle into one node, though the files name a turret node (`sc_turret`). Prop
   animations (flags, radar) are not converted.
