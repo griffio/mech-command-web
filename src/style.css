@@ -1,0 +1,143 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #1b1f22;
+  color: #e8e4da;
+  font: 13px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#app,
+#app canvas {
+  position: fixed;
+  inset: 0;
+  display: block;
+  touch-action: none;
+}
+
+#hud {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  right: 12px;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 80%);
+}
+
+#status:empty {
+  display: none;
+}
+
+#status {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+#help {
+  opacity: 0.85;
+  max-width: 60ch;
+}
+
+#stats {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.lil-gui.root {
+  top: env(safe-area-inset-top);
+}
+
+#perf {
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top));
+  left: max(12px, env(safe-area-inset-left));
+  width: min(340px, calc(100vw - 24px));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgb(20 24 28 / 85%);
+}
+
+#perf[hidden] {
+  display: none;
+}
+
+#perf input,
+#perf button {
+  height: 36px;
+  font: inherit;
+  border-radius: 6px;
+  border: 1px solid #4a5258;
+}
+
+#perf input {
+  flex: 1 1 100%;
+  padding: 0 8px;
+  background: #11161a;
+  color: inherit;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+#perf button {
+  flex: 1 1 100%;
+  background: #2f6f4f;
+  color: #fff;
+  font-weight: 600;
+}
+
+#perf button:disabled {
+  background: #3a4248;
+  color: #a7adb1;
+}
+
+#perf-status:empty {
+  display: none;
+}
+
+#perf-status {
+  flex: 1 1 100%;
+}
+
+#perf-status a {
+  color: #8fd3ff;
+}
+
+#perf-results {
+  flex: 1 1 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+#perf-results th,
+#perf-results td {
+  padding: 2px 4px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+#perf-results caption {
+  caption-side: bottom;
+  padding-top: 4px;
+  text-align: left;
+  opacity: 0.7;
+}
+
+#perf-results th:first-child,
+#perf-results td:first-child {
+  text-align: left;
+}
+
+/* Keep fingers and the panel from moving the camera while a test runs. */
+.perf-running #app canvas,
+.perf-running .lil-gui {
+  pointer-events: none;
+}

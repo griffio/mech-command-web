@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="icon" href="data:," />
+    <title>Mech Command Web Viewer</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="perf" hidden>
+      <input id="perf-label" type="text" placeholder="Device name, e.g. iPad Air M2" autocomplete="off" />
+      <button id="perf-run" type="button">Run perf test</button>
+      <div id="perf-status" aria-live="polite"></div>
+      <table id="perf-results"></table>
+    </div>
+    <div id="hud">
+      <div id="status">Loading…</div>
+      <div id="help">Drag to pan · right-drag or two fingers to rotate · scroll or pinch to zoom · tap a unit to select · tap the ground to walk there</div>
+      <div id="stats"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
