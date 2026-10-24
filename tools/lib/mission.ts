@@ -76,6 +76,8 @@ export interface MissionPart {
   /** ARGB as stored in the mission: base and two highlight colours. */
   colors: [number, number, number];
   csv: string;
+  /** Index of the [WarriorN] section that pilots it. */
+  pilot: number;
 }
 
 export interface MoveMap {
@@ -91,6 +93,8 @@ export interface Mission {
   objects: TerrainObject[];
   parts: MissionPart[];
   move: MoveMap | null;
+  /** Pilot profile (missions/warriors/<profile>.fit) of each [WarriorN] section, by N. */
+  profiles: Map<number, string>;
 }
 
 export function readMission(src: SourceData, name: string): Mission {
@@ -152,10 +156,16 @@ export function readMission(src: SourceData, name: string): Mission {
       player: fit.bool(s, 'PlayerPart'),
       colors: [fit.num(s, 'BaseColor') >>> 0, fit.num(s, 'HighlightColor1') >>> 0, fit.num(s, 'HighlightColor2') >>> 0],
       csv: fit.str(s, 'CSVFile'),
+      pilot: fit.num(s, 'Pilot', i),
     });
   }
+  const profiles = new Map<number, string>();
+  for (let i = 1; i <= fit.num('Warriors', 'NumWarriors'); i++) {
+    const profile = fit.get(`Warrior${i}`, 'Profile');
+    if (profile) profiles.set(i, profile);
+  }
 
-  return { name, fit, terrain: { side, elevation, terrainType }, objects, parts, move };
+  return { name, fit, terrain: { side, elevation, terrainType }, objects, parts, move, profiles };
 }
 
 // ---------------------------------------------------------------------------

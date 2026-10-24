@@ -104,6 +104,11 @@ export class CombatEffects {
     this.smoke(at, 2 * intensity, 9 * intensity, 4, 0.4, [0.13, 0.12, 0.11]);
   }
 
+  /** Smoke from a badly damaged unit (call a few times a second); `amount` 1 is heavy. */
+  damaged(at: V3, amount = 1): void {
+    this.smoke(at, 0.8 * amount, 5 * amount, 2.5, 0.3, [0.2, 0.19, 0.18]);
+  }
+
   private glow(at: V3, size0: number, size1: number, life: number, color: V3, brightness: number): void {
     this.particles.spawn({ x: at[0], y: at[1], z: at[2], size0, size1, life, r: color[0], g: color[1], b: color[2], alpha: brightness, kind: GLOW, fadePow: 1.5 });
   }

@@ -209,3 +209,45 @@ pre#perf-status {
 .perf-running #commands {
   pointer-events: none;
 }
+
+#bars {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.unit-bar {
+  position: absolute;
+  left: -18px;
+  top: -4px;
+  width: 36px;
+  height: 5px;
+  border: 1px solid rgb(190 230 190 / 60%);
+  border-radius: 2px;
+  background: rgb(0 0 0 / 55%);
+  will-change: transform;
+}
+
+.unit-bar.enemy {
+  border-color: rgb(255 120 100 / 75%);
+}
+
+.unit-bar > div {
+  height: 100%;
+}
+
+#log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: 600;
+}
+
+#log .own {
+  color: #c9f2c4;
+}
+
+#log .enemy {
+  color: #ffb9a6;
+}

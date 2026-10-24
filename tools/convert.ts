@@ -25,6 +25,7 @@ import {
   readMission,
   type ModelSpec,
 } from './lib/mission.ts';
+import { ComponentTable, readGunnery, readMechStats, readVehicleStats, type MechStats, type VehicleStats } from './lib/combat-data.ts';
 import { buildModel, TextureLibrary } from './lib/model.ts';
 import { SourceData } from './lib/srcdata.ts';
 import { decodeTga } from './lib/tga.ts';
@@ -195,16 +196,36 @@ json(`${mapDir}/objects.json`, {
   ]),
 });
 
+// --- Combat data ---------------------------------------------------------------
+// Weapons from the component table; each mech's stats file (its CSVFile); each vehicle's object file; pilots' gunnery.
+const components = new ComponentTable(src.text('objects/compbas.csv'));
+const mechStats: Record<string, MechStats> = {};
+const vehicleStats: Record<string, VehicleStats> = {};
+const statsFor = (kind: 'mech' | 'vehicle', csv: string, fitName: string): string | null => {
+  if (kind === 'mech') {
+    const key = csv.toLowerCase();
+    if (!mechStats[key] && src.has(`objects/${key}.csv`)) mechStats[key] = readMechStats(src.text(`objects/${key}.csv`), components);
+    return mechStats[key] ? key : null;
+  }
+  const key = fitName.replace(/\.fit$/i, '').toLowerCase();
+  if (!vehicleStats[key]) vehicleStats[key] = readVehicleStats(src.fit(`objects/${fitName}`), components);
+  return key;
+};
+
 const units = mission.parts.flatMap((p, i) => {
   const key = models.partModels[i];
   if (!key) return [];
   const info = models.infos.get(p.objectNumber)!;
+  const kind = info.cls === ObjectClass.Mech ? 'mech' : 'vehicle';
+  const profile = mission.profiles.get(p.pilot);
   return [
     {
       model: key,
-      kind: info.cls === ObjectClass.Mech ? 'mech' : 'vehicle',
+      kind,
       name: info.name,
       csv: p.csv,
+      stats: statsFor(kind, p.csv, info.fitName),
+      gunnery: (profile && readGunnery(src, profile)) ?? 40,
       x: round(p.x),
       y: round(p.y),
       rotation: round(p.rotation),
@@ -215,7 +236,15 @@ const units = mission.parts.flatMap((p, i) => {
   ];
 });
 const showcase = extraMechs.map((m) => m.toLowerCase()).filter((m) => m in mechMeta);
+for (const m of showcase) statsFor('mech', m, '');
 json(`${mapDir}/units.json`, { mechs: mechMeta, units, showcase });
+const usedWeapons = new Set([...Object.values(mechStats), ...Object.values(vehicleStats)].flatMap((s) => s.weapons.map((w) => w.id)));
+json(`${mapDir}/combat.json`, {
+  weapons: Object.fromEntries([...usedWeapons].map((id) => [id, components.weapons.get(id)])),
+  ammo: Object.fromEntries([...components.ammo].filter(([id]) => [...Object.values(mechStats), ...Object.values(vehicleStats)].some((s) => id in s.ammo))),
+  mechs: mechStats,
+  vehicles: vehicleStats,
+});
 json('manifest.json', { maps: [missionName] });
 
 console.log(

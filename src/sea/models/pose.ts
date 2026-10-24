@@ -7,6 +7,7 @@ export const AFFINE_FLOATS = 12;
 interface Playing {
   clip: ModelClip;
   time: number;
+  loop: boolean;
 }
 
 export class Animator {
@@ -22,6 +23,8 @@ export class Animator {
   private readonly t2: Float32Array;
   private readonly r2: Float32Array;
   private readonly local = new Float32Array(AFFINE_FLOATS);
+  private twistNode = -1;
+  private twistAngle = 0;
 
   constructor(private readonly model: ModelData) {
     const n = model.nodes.length;
@@ -37,21 +40,35 @@ export class Animator {
     return [...this.model.clips.keys()];
   }
 
-  /** Switch to a looping clip, blending from the one playing over `fade` seconds. Unknown names are ignored. */
-  play(name: string, fade = 0.2, startTime = 0): void {
+  /**
+   * Switch to a clip, blending from the one playing over `fade` seconds. A clip that doesn't `loop` holds its last frame.
+   * Unknown names are ignored.
+   */
+  play(name: string, fade = 0.2, startTime = 0, loop = true): void {
     const clip = this.model.clips.get(name);
     if (!clip || name === this.clipName) return;
     this.previous = this.current && fade > 0 ? this.current : null;
     this.fade = 0;
     this.fadeLength = fade;
-    this.current = { clip, time: startTime % Math.max(clip.duration, 1e-3) };
+    this.current = { clip, time: startTime % Math.max(clip.duration, 1e-3), loop };
     this.clipName = name;
   }
 
+  /** A clip played once has reached its end. */
+  get finished(): boolean {
+    return !!this.current && !this.current.loop && this.current.time >= this.current.clip.duration;
+  }
+
+  /** Turn one node (and so everything it carries) about the model's up axis, radians: a mech's torso twist. */
+  setTwist(node: number, angle: number): void {
+    this.twistNode = node;
+    this.twistAngle = angle;
+  }
+
   update(dt: number): void {
-    if (this.current) this.current.time = (this.current.time + dt) % Math.max(this.current.clip.duration, 1e-3);
+    if (this.current) advance(this.current, dt);
     if (this.previous) {
-      this.previous.time = (this.previous.time + dt) % Math.max(this.previous.clip.duration, 1e-3);
+      advance(this.previous, dt);
       this.fade += dt;
       if (this.fade >= this.fadeLength) this.previous = null;
     }
@@ -73,7 +90,25 @@ export class Animator {
       trsAffine(this.local, 0, this.t, i * 3, this.r, i * 4, node.scale);
       if (node.parent < 0) m.set(this.local, i * AFFINE_FLOATS);
       else mulAffine(m, i * AFFINE_FLOATS, m, node.parent * AFFINE_FLOATS, this.local, 0);
+      if (i === this.twistNode && this.twistAngle !== 0) yawInPlace(m, i * AFFINE_FLOATS, this.twistAngle);
     }
+  }
+}
+
+function advance(playing: Playing, dt: number): void {
+  const length = Math.max(playing.clip.duration, 1e-3);
+  playing.time = playing.loop ? (playing.time + dt) % length : Math.min(playing.time + dt, length);
+}
+
+/** Rotate an affine matrix's axes about the y axis by `angle` radians, keeping its origin where it is. */
+function yawInPlace(m: Float32Array, o: number, angle: number): void {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  for (let col = 0; col < 3; col++) {
+    const x = m[o + col]!;
+    const z = m[o + 8 + col]!;
+    m[o + col] = c * x + s * z;
+    m[o + 8 + col] = -s * x + c * z;
   }
 }
 

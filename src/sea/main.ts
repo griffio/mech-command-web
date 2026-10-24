@@ -16,7 +16,8 @@ import { DEFAULT_SEA, SeaRenderer, type SeaQuality } from './render/sea-renderer
 import { SurfLines } from './sim/terrain/surf';
 import { Terrain } from './sim/terrain/terrain';
 import { mc2TerrainGrid, upsampleGrid } from './app/mc2-map';
-import { PLAYER_TEAM, World } from './app/world';
+import { UnitBars } from './app/unit-bars';
+import { PLAYER_TEAM, World, type SeaUnit } from './app/world';
 
 /** The dreadnought game's pixel budget: a Retina iPad canvas is about 5.6 MP, more than the sea needs. */
 const MAX_PIXELS = 3_600_000;
@@ -107,6 +108,11 @@ async function main() {
   controls.groundAt = (x, z) => terrain.heightAt(x, z);
 
   mountOrders(canvas, camera, world);
+  const bars = new UnitBars(document.getElementById('bars')!);
+  world.battle.onEvent = (text, team) => {
+    logEvent(text, team);
+    if (world.battle.outcome) setStatus(text);
+  };
 
   const sizer = new CanvasSizer(canvas, gpu.device.limits.maxTextureDimension2D, (w, h) => sea.resize(w, h), MAX_PIXELS);
   if (fixedScale !== null) sizer.renderScale = fixedScale;
@@ -158,6 +164,7 @@ async function main() {
     controls.update();
     camera.update(canvas.clientWidth / Math.max(canvas.clientHeight, 1));
     world.update(dt, !survey.running);
+    bars.update(world, camera, canvas.clientWidth, canvas.clientHeight);
     // The shadow map covers what the camera looks at, growing in 25% steps as it zooms out (so it doesn't shimmer). The
     // shadows fade out between 700 and 1000 m: from further off a tree's shadow is a pixel or two, and the map's own
     // shadows are baked into its colour map anyway. Past the fade there is no shadow pass at all.
@@ -260,13 +267,44 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World) {
 }
 
 function describeSelection(world: World): string {
-  if (world.inspected) {
-    const u = world.inspected;
-    return `${u.team === PLAYER_TEAM ? '' : 'Enemy '}${u.name} (${u.kind})`;
+  const u = world.inspected;
+  if (u) {
+    const who = `${u.team === PLAYER_TEAM ? '' : 'Enemy '}${u.name} (${u.kind})`;
+    if (!u.alive) return `${who}: destroyed, ${u.combat?.dead ?? ''}`;
+    const attackers = [...world.selected].filter((s) => s.attackOrder === u).length;
+    return `${who} · ${percent(u)}${attackers ? ` · ${attackers} of yours attacking` : ''}`;
   }
-  const names = [...world.selected].map((u) => u.name);
-  if (!names.length) return 'Tap one of your mechs to select it, or Select all';
-  return `${names.join(', ')} · tap the ground to move ${names.length > 1 ? 'them' : 'it'}`;
+  const units = [...world.selected];
+  if (!units.length) return 'Tap one of your mechs to select it, or Select all';
+  const hint = `tap the ground to move ${units.length > 1 ? 'them' : 'it'}, an enemy to attack`;
+  if (units.length === 1) return `${describeUnit(world, units[0]!)} · ${hint}`;
+  return `${units.map((u) => `${u.name} ${percent(u)}`).join(', ')} · ${hint}`;
+}
+
+/** Name, armour left, working weapons, ammunition, and what it's shooting at. */
+function describeUnit(world: World, u: SeaUnit): string {
+  const c = u.combat;
+  if (!c) return u.name;
+  const parts = [`${u.name} ${percent(u)}`, `${c.weapons.filter((w) => !w.destroyed).length}/${c.weapons.length} weapons`];
+  const ammo = [...c.ammo].map(([id, rounds]) => `${world.ammoName(id)} ${rounds}`).join(', ');
+  if (ammo) parts.push(ammo);
+  if (u.target) parts.push(`${u.attackOrder ? 'attacking' : 'firing at'} ${u.target.name}, ${Math.round(Math.hypot(u.target.x - u.x, u.target.z - u.z))} m`);
+  return parts.join(' · ');
+}
+
+function percent(u: SeaUnit): string {
+  return u.combat ? `${Math.round(u.combat.integrity * 100)}%` : '';
+}
+
+/** A line in the battle log, which fades after a while (the newest at the bottom, a few at most). */
+function logEvent(text: string, team: number) {
+  const log = document.getElementById('log')!;
+  const line = document.createElement('div');
+  line.textContent = text;
+  line.className = team === PLAYER_TEAM ? 'own' : 'enemy';
+  log.append(line);
+  while (log.children.length > 5) log.firstElementChild!.remove();
+  window.setTimeout(() => line.remove(), 9000);
 }
 
 /** The panel's button runs the survey and POSTs the report to the dev server (see vite.config.ts). */

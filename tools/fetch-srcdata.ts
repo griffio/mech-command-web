@@ -69,8 +69,14 @@ checkout(
   }),
 );
 
-// 2. Model geometry and animation for everything the mission places.
-const models = collectMissionModels(tree, readMission(tree, mission), extraMechs);
+// 2. The pilots' profiles (their gunnery is the chance to hit), then model geometry and animation for everything the
+//    mission places.
+const missionData = readMission(tree, mission);
+checkout(
+  'pilots',
+  [...new Set(missionData.profiles.values())].map((p) => tree.actual(`missions/warriors/${p}.fit`)).filter((p): p is string => p !== null),
+);
+const models = collectMissionModels(tree, missionData, extraMechs);
 const aseFiles = [...models.specs.values()].flatMap((s) => [s.base, ...s.clips.map((c) => c.file)]);
 checkout('models', aseFiles);
 

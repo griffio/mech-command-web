@@ -1,16 +1,23 @@
 // MC2's buildings, trees and units on the WebGPU page, in metres (MC2 units / 5.01) and the dreadnought game's axes
-// (x east, y up, z south): placement, the two sides, selection, and move orders routed over MC2's movement map.
-import { ASSET_ROOT, loadBinary, loadJson, type MapInfo, type MechInfo, type ObjectsFile, type UnitsFile } from '../../assets.ts';
+// (x east, y up, z south): placement, the two sides, selection, move orders routed over MC2's movement map, and attack
+// orders (the fighting itself is Battle's).
+import { ASSET_ROOT, loadBinary, loadJson, type CombatFile, type MapInfo, type MechInfo, type ObjectsFile, type UnitsFile } from '../../assets.ts';
 import { PLAYER_PAINT, paintFromMission, type PaintScheme } from '../../paint.ts';
 import type { Camera } from '../render/camera';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import type { SeaRenderer } from '../render/sea-renderer';
 import { parseGlb, type ModelData } from '../models/glb';
 import { AFFINE_FLOATS, Animator, mulAffine, placement, restPose } from '../models/pose';
+import { MechCombat, VehicleCombat } from '../sim/combat';
 import { MoveGrid } from '../sim/move-grid';
 import type { Terrain } from '../sim/terrain/terrain';
+import { Battle } from './battle';
 
 const TURN_RATE = 120; // degrees per second
+/** Every ground vehicle moves at this, metres a second (gamesys.fit). */
+const VEHICLE_SPEED = 9;
+/** How fast a vehicle's turret turns, degrees a second. */
+const TURRET_RATE = 180;
 const ARRIVE_M = 4;
 /** The land's colour map is shown at this brightness (map-ground DEFAULT_MAP_LOOK); models match it. */
 const GAIN = 1.35;
@@ -18,32 +25,109 @@ const GAIN = 1.35;
 const FORMATION_SPACING = 16;
 /** The player's own side (team 0 in the mission file). */
 export const PLAYER_TEAM = 0;
+/** Paint for burnt-out wrecks: every team colour goes to soot. */
+const WRECK_PAINT: PaintScheme = { red: '#2b2724', green: '#2b2724', blue: '#2b2724' };
+const WRECK_GAIN = 0.55;
+
+/** How a unit is drawn. */
+export interface UnitBody {
+  instance: ModelInstance;
+  animator: Animator | null;
+  rest: Float32Array;
+  info: MechInfo | null;
+  scale: number;
+  /** Node index by name: weapon mounts, the cockpit, the torso joint. */
+  nodes: Map<string, number>;
+  /** The GLB it was made from (its wreck is drawn from it too). */
+  modelPath: string;
+}
+
+type V3 = [number, number, number];
 
 export class SeaUnit {
   /** Waypoints still to walk, world x and z (metres); empty when standing. */
   route: [number, number][] = [];
   running = false;
+  /** Whom it shoots at, chosen each combat tick (see Battle). */
+  target: SeaUnit | null = null;
+  /** An enemy the player ordered it to attack: it closes in and stays on it until one of them is destroyed. */
+  attackOrder: SeaUnit | null = null;
+  /** The route is the battle's (closing on a target), not the player's. */
+  engaging = false;
+  /** Torso twist (mechs) or turret angle (vehicles) from the hull, degrees. */
+  twist = 0;
+  instance: ModelInstance;
+  readonly info: MechInfo | null;
+  readonly modelPath: string;
   private routeIndex = 0;
+  private turning = false;
   private readonly frame = new Float32Array(AFFINE_FLOATS);
+  private readonly animator: Animator | null;
+  private readonly rest: Float32Array;
+  private readonly scale: number;
+  private readonly nodes: Map<string, number>;
+  private readonly torsoNode: number;
 
   constructor(
     readonly name: string,
     readonly kind: 'mech' | 'vehicle',
     readonly team: number,
-    readonly instance: ModelInstance,
-    private readonly animator: Animator | null,
-    private readonly rest: Float32Array,
-    readonly info: MechInfo | null,
-    private readonly scale: number,
+    body: UnitBody,
+    /** Its armour, weapons and pilot; null for a unit that has no stats (it can't fight or be hurt). */
+    readonly combat: MechCombat | VehicleCombat | null,
     public x: number,
     public z: number,
     /** MC2 rotation, degrees: the unit faces (sin r, cos r) in x, z (0 faces south). */
     public rotation: number,
-  ) {}
+  ) {
+    this.instance = body.instance;
+    this.animator = body.animator;
+    this.rest = body.rest;
+    this.info = body.info;
+    this.scale = body.scale;
+    this.nodes = body.nodes;
+    this.modelPath = body.modelPath;
+    this.torsoNode = body.nodes.get('joint_torso') ?? -1;
+  }
+
+  get alive(): boolean {
+    return this.combat?.alive ?? true;
+  }
 
   /** A unit the player can give orders to. */
   get commandable(): boolean {
-    return this.team === PLAYER_TEAM && this.kind === 'mech';
+    return this.team === PLAYER_TEAM && this.kind === 'mech' && this.alive;
+  }
+
+  /** Where its weapons point: the torso's facing on a mech, the turret's on a vehicle (MC2 degrees). */
+  get aimYaw(): number {
+    return this.rotation + this.twist;
+  }
+
+  /** How far the torso or turret turns either way, degrees (0: the hull must face the target). */
+  private get twistLimit(): number {
+    const stats = this.combat?.stats;
+    if (!stats) return 0;
+    return 'torsoYaw' in stats ? stats.torsoYaw : stats.turretYaw;
+  }
+
+  private get twistRate(): number {
+    const stats = this.combat?.stats;
+    return stats && 'torsoYawRate' in stats ? stats.torsoYawRate : TURRET_RATE;
+  }
+
+  /** A node's position in the world, metres (null if the model has no such node). */
+  nodePosition(name: string): V3 | null {
+    const k = this.nodes.get(name);
+    if (k === undefined) return null;
+    const m = this.instance.matrices;
+    const o = k * AFFINE_FLOATS;
+    return [m[o + 3]!, m[o + 7]!, m[o + 11]!];
+  }
+
+  /** Height its pilot sees from, metres above the sea. */
+  get eyeY(): number {
+    return this.instance.center[1] + this.instance.model.radius * 0.25;
   }
 
   get clipName(): string {
@@ -70,19 +154,42 @@ export class SeaUnit {
 
   stop(): void {
     this.route = [];
+    this.engaging = false;
     this.play('idle');
   }
 
-  /** Speed from the gesture data: MC2 gives it in metres a second already. */
+  /** Fall (backward when the killing shot came from the front) and stop fighting. */
+  die(fromFront: boolean): void {
+    this.route = [];
+    this.target = null;
+    this.attackOrder = null;
+    this.engaging = false;
+    // The models' destroyed gestures carry no keys; the falls they match frame for frame do.
+    this.animator?.play(fromFront ? 'fallBackward' : 'fallForward', 0.15, 0, false);
+  }
+
+  /** A dead mech has finished falling (a vehicle has nothing to play). */
+  get fallen(): boolean {
+    return !this.animator || this.animator.finished;
+  }
+
+  /** Speed from the gesture data (MC2 gives it in metres a second already); vehicles all move alike. */
   get speed(): number {
+    if (this.kind === 'vehicle') return VEHICLE_SPEED;
     return this.info?.clips[this.running ? 'run' : 'walk']?.startVelocity ?? 10;
   }
 
   /** `move` false keeps the unit where it is (still animating): the perf survey wants the same picture throughout. */
   update(dt: number, terrain: Terrain, move = true): void {
-    if (move && this.route.length && this.kind === 'mech') this.steer(dt);
+    if (move && this.alive) {
+      if (this.route.length) this.steer(dt);
+      else if (this.target) this.faceTarget(dt);
+      this.aim(dt);
+    }
     this.animator?.update(dt);
-    const y = terrain.heightAt(this.x, this.z);
+    // Mechs wade; vehicles (the hovercraft, at least) ride on the water.
+    const ground = terrain.heightAt(this.x, this.z);
+    const y = this.kind === 'vehicle' ? Math.max(ground, 0) : ground;
     placement(this.frame, this.x, y, this.z, (this.rotation * Math.PI) / 180, this.scale);
     const nodes = this.animator?.matrices ?? this.rest;
     const out = this.instance.matrices;
@@ -90,6 +197,30 @@ export class SeaUnit {
     this.instance.center[0] = this.x;
     this.instance.center[1] = y + this.instance.model.radius * 0.5;
     this.instance.center[2] = this.z;
+  }
+
+  /** Standing, turn the hull toward the target when the torso (or turret) can't reach it. */
+  private faceTarget(dt: number): void {
+    const t = this.target!;
+    const rel = wrapDegrees(bearing(this, t) - this.rotation);
+    const slack = Math.max(this.twistLimit - 10, 5);
+    if (Math.abs(rel) > slack) {
+      this.rotation = (this.rotation + Math.sign(rel) * Math.min(Math.abs(rel), TURN_RATE * dt) + 360) % 360;
+      this.play('walk');
+      this.turning = true;
+    } else if (this.turning) {
+      this.turning = false;
+      this.play('idle');
+    }
+  }
+
+  /** Turn the torso (or turret) toward the target, within its limits; with none, back to the front. */
+  private aim(dt: number): void {
+    const limit = this.twistLimit;
+    const want = this.target ? Math.min(Math.max(wrapDegrees(bearing(this, this.target) - this.rotation), -limit), limit) : 0;
+    const diff = wrapDegrees(want - this.twist);
+    this.twist = wrapDegrees(this.twist + Math.sign(diff) * Math.min(Math.abs(diff), this.twistRate * dt));
+    if (this.torsoNode >= 0) this.animator?.setTwist(this.torsoNode, (this.twist * Math.PI) / 180);
   }
 
   private steer(dt: number): void {
@@ -105,6 +236,7 @@ export class SeaUnit {
     const desired = (Math.atan2(dx, dz) * 180) / Math.PI;
     const diff = ((desired - this.rotation + 540) % 360) - 180;
     this.rotation = (this.rotation + Math.sign(diff) * Math.min(Math.abs(diff), TURN_RATE * dt) + 360) % 360;
+    this.turning = false;
     this.play(this.running ? 'run' : 'walk');
     // Turn in place first when the next waypoint is well off to the side.
     if (Math.abs(diff) < 30) {
@@ -124,17 +256,21 @@ export class World {
   inspected: SeaUnit | null = null;
   propCount = 0;
   readonly grid: MoveGrid | null;
+  /** The fighting: targets, fire, damage and wrecks. */
+  battle!: Battle;
   private rings: ModelInstance[] = [];
   private ringModel: GpuModel | null = null;
   private inspectRing: ModelInstance | null = null;
   private readonly glbs = new Map<string, Promise<ModelData>>();
+  private readonly wrecks = new Map<string, Promise<GpuModel>>();
   private readonly ringFrame = new Float32Array(AFFINE_FLOATS);
 
   private constructor(
     private readonly sea: SeaRenderer,
-    private readonly terrain: Terrain,
+    readonly terrain: Terrain,
     private readonly info: MapInfo,
     private readonly unitsFile: UnitsFile,
+    private readonly combatFile: CombatFile,
     grid: MoveGrid | null,
   ) {
     this.grid = grid;
@@ -145,16 +281,18 @@ export class World {
   }
 
   static async load(sea: SeaRenderer, terrain: Terrain, info: MapInfo, mapDir: string, progress: (text: string) => void): Promise<World> {
-    const [objects, unitsFile, cells] = await Promise.all([
+    const [objects, unitsFile, combatFile, cells] = await Promise.all([
       loadJson<ObjectsFile>(mapDir + 'objects.json'),
       loadJson<UnitsFile>(mapDir + 'units.json'),
+      loadJson<CombatFile>(mapDir + 'combat.json'),
       info.move ? loadBinary(mapDir + info.move.file) : Promise.resolve(null),
     ]);
     // The movement map covers the same square as the terrain: side * 128 MC2 units.
     const extent = (info.side * info.worldUnitsPerVertex) / info.worldUnitsPerMeter;
     const grid =
       cells && info.move ? new MoveGrid(new Uint32Array(cells), info.move.width, info.move.height, extent / info.move.width, [-extent / 2, -extent / 2]) : null;
-    const world = new World(sea, terrain, info, unitsFile, grid);
+    const world = new World(sea, terrain, info, unitsFile, combatFile, grid);
+    world.battle = new Battle(world, sea.fx);
     progress('Loading buildings and trees…');
     await world.placeProps(objects);
     progress('Loading units…');
@@ -162,7 +300,10 @@ export class World {
       unitsFile.units.map(async (u) => {
         const paint = u.player ? PLAYER_PAINT : paintFromMission(u.colors);
         // The stats file's name (Werewolf, Bushwacker) reads better than the object file's (werewolf, BushWacker).
-        const unit = await world.spawn(u.model, u.kind, u.csv || u.name, u.team, u.x * world.scale, -u.y * world.scale, u.rotation, paint);
+        const unit = await world.spawn(u.model, u.kind, u.csv || u.name, u.team, u.x * world.scale, -u.y * world.scale, u.rotation, paint, {
+          stats: u.stats,
+          gunnery: u.gunnery,
+        });
         world.units.push(unit);
       }),
     );
@@ -172,7 +313,8 @@ export class World {
       const [x, z] = world.openNear((lead?.x ?? 0) + (i ? 1 : -1) * 2.2 * FORMATION_SPACING, (lead?.z ?? 0) + FORMATION_SPACING);
       const paint = i % 2 ? PLAYER_PAINT : paintFromMission(['#3a5f8f', '#c8c8c8', '#202830']);
       const name = key.charAt(0).toUpperCase() + key.slice(1);
-      world.units.push(await world.spawn(key, 'mech', name, PLAYER_TEAM, x, z, lead?.rotation ?? 0, paint));
+      // Their pilots are regulars (the mission gives them none).
+      world.units.push(await world.spawn(key, 'mech', name, PLAYER_TEAM, x, z, lead?.rotation ?? 0, paint, { stats: key, gunnery: 40 }));
     }
     world.ringModel = await world.sea.models.addModel(selectionRing('selection-ring', [0.35, 1, 0.3, 1]), { scale: 1, unlit: true, gain: 1.4 });
     world.inspectRing = world.sea.models.addInstance(
@@ -183,18 +325,75 @@ export class World {
     return world;
   }
 
-  /** Put a mech or vehicle on the map (world metres). */
-  async spawn(key: string, kind: 'mech' | 'vehicle', name: string, team: number, x: number, z: number, rotation: number, paint: PaintScheme): Promise<SeaUnit> {
+  /** Put a mech or vehicle on the map (world metres), with its stats from combat.json (`fight.stats` is their key). */
+  async spawn(
+    key: string,
+    kind: 'mech' | 'vehicle',
+    name: string,
+    team: number,
+    x: number,
+    z: number,
+    rotation: number,
+    paint: PaintScheme,
+    fight: { stats: string | null; gunnery: number },
+  ): Promise<SeaUnit> {
     const info = kind === 'mech' ? (this.unitsFile.mechs[key] ?? null) : null;
-    const data = await this.glb(info ? info.model : `models/props/${key}.glb`);
+    const modelPath = info ? info.model : `models/props/${key}.glb`;
+    const data = await this.glb(modelPath);
     const model = await this.sea.models.addModel(data, { scale: this.scale, paint, gain: GAIN });
     const animator = data.clips.size ? new Animator(data) : null;
-    const unit = new SeaUnit(name, kind, team, this.sea.models.addInstance(model), animator, restPose(data), info, this.scale, x, z, rotation);
+    const body: UnitBody = {
+      instance: this.sea.models.addInstance(model),
+      animator,
+      rest: restPose(data),
+      info,
+      scale: this.scale,
+      nodes: new Map(data.nodes.map((n, i) => [n.name, i])),
+      modelPath,
+    };
+    const unit = new SeaUnit(name, kind, team, body, this.combatant(kind, fight.stats, fight.gunnery), x, z, rotation);
     if (animator) {
       animator.play('idle', 0, Math.random() * 3); // out of step, so a lance does not breathe in unison
     }
     unit.update(0, this.terrain);
     return unit;
+  }
+
+  private combatant(kind: 'mech' | 'vehicle', stats: string | null, gunnery: number): MechCombat | VehicleCombat | null {
+    const c = this.combatFile;
+    if (kind === 'mech') {
+      const s = stats ? c.mechs[stats] : undefined;
+      if (!s) return null;
+      return new MechCombat(s, c.weapons, (id) => ({ perRound: c.ammo[id]?.explosive ?? 0, perPack: c.ammo[id]?.shotsPerPack ?? 0 }), gunnery);
+    }
+    const s = stats ? c.vehicles[stats] : undefined;
+    return s ? new VehicleCombat(s, c.weapons, gunnery) : null;
+  }
+
+  /** Ammunition's short name: AC10, LRM5, Streak SRM2. */
+  ammoName(id: number): string {
+    const name = this.combatFile.ammo[id]?.name ?? String(id);
+    return name.match(/\(([^)]+)\)/)?.[1] ?? name.replace(/( Rack| Pack)? Ammo$/, '');
+  }
+
+  /** A unit was destroyed: it can no longer be selected, and the battle log has said so. */
+  unitDied(unit: SeaUnit): void {
+    this.selected.delete(unit);
+    if (this.inspected === unit) this.inspected = null;
+  }
+
+  /** Draw a destroyed unit as a burnt-out wreck, keeping its pose. */
+  async makeWreck(unit: SeaUnit): Promise<void> {
+    let model = this.wrecks.get(unit.modelPath);
+    if (!model) {
+      model = this.glb(unit.modelPath).then((data) => this.sea.models.addModel(data, { scale: this.scale, paint: WRECK_PAINT, gain: WRECK_GAIN }));
+      this.wrecks.set(unit.modelPath, model);
+    }
+    const wreck = this.sea.models.addInstance(await model);
+    wreck.matrices.set(unit.instance.matrices);
+    wreck.center.splice(0, 3, ...unit.instance.center);
+    this.sea.models.removeInstance(unit.instance);
+    unit.instance = wreck;
   }
 
   remove(unit: SeaUnit): void {
@@ -204,10 +403,14 @@ export class World {
     if (this.inspected === unit) this.inspected = null;
   }
 
-  /** Tap on a unit: the player's own replace the selection (or toggle in it when `add`); others are only inspected. */
+  /**
+   * Tap on a unit: the player's own replace the selection (or toggle in it when `add`). An enemy is attacked by the
+   * selection, if there is one, and shown in the HUD.
+   */
   tapUnit(unit: SeaUnit, add: boolean): void {
     if (!unit.commandable) {
       this.inspected = unit;
+      if (unit.team !== PLAYER_TEAM && unit.alive && this.selected.size) this.orderAttack(unit);
       return;
     }
     this.inspected = null;
@@ -225,12 +428,30 @@ export class World {
     for (const u of this.units) if (u.commandable) this.selected.add(u);
   }
 
+  /** Stop walking and drop any attack order (the mechs still fire at what comes into range). */
   stopSelected(): void {
-    for (const u of this.selected) u.stop();
+    for (const u of this.selected) {
+      u.attackOrder = null;
+      u.stop();
+    }
   }
 
   setRunning(running: boolean): void {
     for (const u of this.selected) u.running = running;
+  }
+
+  /** Send the selection after an enemy: each closes to its best range and fires until one of them is destroyed. */
+  orderAttack(target: SeaUnit): number {
+    let ordered = 0;
+    for (const u of this.selected) {
+      if (!u.combat) continue;
+      u.attackOrder = target;
+      u.target = target;
+      // It replaces any move order; the battle routes it toward the target on its next tick.
+      if (u.route.length) u.stop();
+      ordered++;
+    }
+    return ordered;
   }
 
   /**
@@ -247,6 +468,9 @@ export class World {
       const [sx, sz] = this.openNear(x + slots[i]![0], z + slots[i]![1]);
       const route = this.grid ? this.grid.findPath(u.x, u.z, sx, sz) : [[sx, sz] as [number, number]];
       if (route) {
+        // A move order ends an attack order; the mech still fires at what it passes.
+        u.attackOrder = null;
+        u.engaging = false;
         u.walkTo(route);
         routed++;
       }
@@ -255,6 +479,7 @@ export class World {
   }
 
   update(dt: number, move = true): void {
+    if (move) this.battle.update(dt);
     for (const u of this.units) u.update(dt, this.terrain, move);
     this.updateRings();
   }
@@ -266,6 +491,7 @@ export class World {
     let best: SeaUnit | null = null;
     let bestT = Infinity;
     for (const u of this.units) {
+      if (!u.alive) continue; // a tap on a wreck is a tap on the ground
       const c = u.instance.center;
       const t = (c[0] - o[0]) * d[0] + (c[1] - o[1]) * d[1] + (c[2] - o[2]) * d[2];
       if (t <= 0 || t >= bestT) continue;
@@ -296,7 +522,7 @@ export class World {
   }
 
   /** The nearest point a mech can stand on (the point itself if it's open, else the centre of the nearest open cell). */
-  private openNear(x: number, z: number): [number, number] {
+  openNear(x: number, z: number): [number, number] {
     const grid = this.grid;
     if (!grid) return [x, z];
     const [r, c] = grid.cellOf(x, z);
@@ -362,6 +588,16 @@ export class World {
     }
     return entry;
   }
+}
+
+/** Degrees wrapped to -180..180. */
+export function wrapDegrees(d: number): number {
+  return ((((d + 180) % 360) + 360) % 360) - 180;
+}
+
+/** MC2 heading from one unit to another, degrees. */
+export function bearing(from: { x: number; z: number }, to: { x: number; z: number }): number {
+  return (Math.atan2(to.x - from.x, to.z - from.z) * 180) / Math.PI;
 }
 
 /** Offsets for `count` units about a point: the middle, then rings of six, twelve, ... `spacing` apart. */

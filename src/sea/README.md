@@ -36,7 +36,10 @@ New:
   laser and PPC fire, and `combat-effects.ts`, the MC2-scale presets built from them.
 - `models/`: a reader for the converter's GLB files and an animator for their clips (no three.js on this page).
 - `app/world.ts`: the mission's placements, units walking as in the three.js viewer, tap picking, the
-  selection ring. `app/mc2-map.ts`: MC2 heights in metres and a bilinear upsample. `app/orbit-controls.ts`:
+  selection ring, move and attack orders.
+- `sim/combat.ts`: MC2's combat rules; `app/battle.ts`: targets, fire, damage and wrecks on those rules (see
+  Gameplay below); `app/unit-bars.ts`: health bars over the units.
+- `sim/move-grid.ts`: routes over MC2's movement map. `app/mc2-map.ts`: MC2 heights in metres and a bilinear upsample. `app/orbit-controls.ts`:
   the RTS camera with touch. `main.ts`.
 - `../paint.ts` (shared with the three.js viewer): MC2's team paint.
 
@@ -46,3 +49,36 @@ MC2 world units become metres at 5.01 units a metre, heights are relative to
 the mission's water elevation, and the axes are the dreadnought game's: x east,
 y up, z south. The sun comes from the mission's light direction, so the sky
 agrees with the shadows baked into the colour map.
+
+## Gameplay
+
+The player's lance (the mission's Werewolf and two Bushwackers, plus an Atlas
+and a Mad Cat) against the mission's vehicles and mechs. Tap the ground to move
+the selection, an enemy to attack it.
+
+Combat follows the original code, with its data exported by the converter to
+`combat.json` (weapons from `compbas.csv`, each mech's armour, structure,
+loadout and crit slots from its stats CSV, vehicles from their object files,
+pilots' gunnery from `missions/warriors/*.fit`):
+
+- Every quarter second each unit picks a target: the one it was ordered to
+  attack, else the nearest enemy its side can see (225 m, the ground blocks the
+  view) within 275 m. Enemies close to their best range; the player's mechs hold
+  where they are unless ordered to attack.
+- Every loaded weapon that is in its range band (short 0-60 m, medium 30-120,
+  long 60-180, give or take 12 m), in sight (LRMs may use a teammate's), and
+  within 12.5° of where the torso or turret points fires. A mech's torso turns
+  120° either way.
+- A shot hits when d100 is under the pilot's gunnery (5-95%); nothing else
+  changes the odds. Missile racks roll once and do their damage once; a Streak
+  that would miss doesn't launch.
+- Mechs: the hit location comes from the arc the shot came from; damage goes
+  through armour, then structure (with a chance of critical hits: the engine,
+  the cockpit, weapons, ammunition that explodes), then on inward. The centre
+  torso, the head, both legs, the engine or the cockpit gone, or six pilot
+  wounds, and the mech is destroyed. Vehicles die when any side's structure
+  goes. There is no heat: the original compiles it out.
+
+An Atlas (gunnery 40) takes a median 64 s to destroy a Werewolf from 90 m, as
+in a simulation of the original rules.
+

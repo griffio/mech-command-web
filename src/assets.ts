@@ -1,5 +1,6 @@
 // Types and loaders for the files written by tools/convert.ts.
 import { Vector3 } from 'three';
+import type { AmmoDef, MechStats, VehicleStats, WeaponDef } from '../tools/lib/combat-data.ts';
 
 export interface ImageRef {
   file: string;
@@ -53,6 +54,10 @@ export interface UnitPlacement {
   kind: 'mech' | 'vehicle';
   name: string;
   csv: string;
+  /** Key of its stats in combat.json (mechs or vehicles), or null when it has none. */
+  stats: string | null;
+  /** The pilot's gunnery: the chance to hit, percent. */
+  gunnery: number;
   x: number;
   y: number;
   rotation: number;
@@ -66,6 +71,26 @@ export interface UnitsFile {
   mechs: Record<string, MechInfo>;
   units: UnitPlacement[];
   showcase: string[];
+}
+
+export type {
+  AmmoDef,
+  ArmorLocation,
+  MechLocation,
+  MechStats,
+  RangeClass,
+  SlotContent,
+  VehicleLocation,
+  VehicleStats,
+  WeaponDef,
+} from '../tools/lib/combat-data.ts';
+
+/** combat.json: the weapons and ammunition the map's units carry, and each unit type's armour and loadout. */
+export interface CombatFile {
+  weapons: Record<string, WeaponDef>;
+  ammo: Record<string, AmmoDef>;
+  mechs: Record<string, MechStats>;
+  vehicles: Record<string, VehicleStats>;
 }
 
 export const ASSET_ROOT = `${import.meta.env.BASE_URL}assets/`;
