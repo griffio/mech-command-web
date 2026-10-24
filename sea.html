@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="icon" href="data:," />
+    <title>Mech Command Sea Experiment</title>
+  </head>
+  <body class="sea-page">
+    <canvas id="sea"></canvas>
+    <div id="perf" hidden>
+      <input id="perf-label" type="text" placeholder="Device name, e.g. iPad Air M2" autocomplete="off" />
+      <button id="perf-run" type="button">Run sea survey</button>
+      <pre id="perf-status" aria-live="polite"></pre>
+    </div>
+    <div id="hud">
+      <div id="status">Loading…</div>
+      <div id="help">WebGPU sea and sky from the dreadnought game · drag to pan · right-drag or two fingers to turn and tilt · scroll or pinch to zoom · <a href="./">three.js viewer</a></div>
+      <div id="stats"></div>
+    </div>
+    <script type="module" src="/src/sea/main.ts"></script>
+  </body>
+</html>

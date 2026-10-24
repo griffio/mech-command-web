@@ -52,6 +52,10 @@ function perfReports(): Plugin {
       for (const s of report.scenarios ?? []) {
         console.log(`  ${s.name.padEnd(22)} ${s.fps.toFixed(1).padStart(6)} fps   p95 ${s.frameMs.p95.toFixed(1)} ms`);
       }
+      // The sea page's survey: per-frame GPU cost of each configuration.
+      for (const r of report.rows ?? []) {
+        console.log(`  ${r.name.padEnd(34)} ${r.costMs.toFixed(2).padStart(6)} ms${r.clipped ? '*' : ' '}  (${r.deltaMs >= 0 ? '+' : ''}${r.deltaMs.toFixed(2)})`);
+      }
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ file: `perf-reports/${name}` }));
     });
@@ -66,6 +70,7 @@ function perfReports(): Plugin {
 interface PerfReportSummary {
   label?: string;
   scenarios?: { name: string; fps: number; frameMs: { p95: number } }[];
+  rows?: { name: string; costMs: number; deltaMs: number; clipped: boolean }[];
 }
 
 export default defineConfig(({ mode }) => ({
@@ -75,5 +80,11 @@ export default defineConfig(({ mode }) => ({
   plugins: [perfReports(), ...(mode === 'https' ? [basicSsl()] : [])],
   server: { host: true },
   // Converted game data lives in public/assets, so keep Vite's bundle out of that folder.
-  build: { target: 'es2022', assetsDir: 'static', chunkSizeWarningLimit: 1500 },
+  build: {
+    target: 'es2022',
+    assetsDir: 'static',
+    chunkSizeWarningLimit: 1500,
+    // Two pages: the three.js viewer, and the WebGPU sea experiment.
+    rollupOptions: { input: { main: 'index.html', sea: 'sea.html' } },
+  },
 }));
