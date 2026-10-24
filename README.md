@@ -10,6 +10,15 @@ data is converted offline into glTF, WebP, PNG and JSON.
 - **The viewer** (`viewer.html`) is the earlier three.js/WebGL2 version. The game
   sends any browser without WebGPU there automatically.
 
+![The player's lance against the mission's vehicles: LRM volleys, lasers and PPCs](docs/screenshots/battle.jpg)
+
+| | |
+|---|---|
+| ![The lance on the first island](docs/screenshots/lance.jpg) | ![The lance by the airfield](docs/screenshots/airfield.jpg) |
+| ![The mission's islands from above](docs/screenshots/overview.jpg) | ![After the battle: burning wrecks](docs/screenshots/aftermath.jpg) |
+
+Screenshots are from headless Chrome on a Mac, at full render scale.
+
 ## Quick start
 
 ```bash
@@ -50,8 +59,8 @@ memory with mipmaps, against about 140 MB at full size). Model textures are capp
 Controls: drag to pan, right-drag or two fingers to turn and tilt, scroll or
 pinch to zoom. Tap one of your mechs to select it, long-press (or shift-click)
 to add one to the selection or take it out, or use **Select all**; tap the ground
-to send the selection there. **Stop** halts them and **Run** makes them run. A tap
-on an enemy shows what it is.
+to send the selection there, or an enemy to attack it. **Stop** halts them (and
+drops an attack order) and **Run** makes them run.
 
 Your lance is the mission's three mechs plus the Atlas and Madcat. Orders are
 routed over MC2's movement map (`src/sea/sim/move-grid.ts`): A* over its
@@ -60,6 +69,38 @@ shallow water and passable ground only, forest about 2.8× the cost of clear
 ground), then pulled tight so routes only turn where something is in the way. A
 group's mechs take formation slots about the point, nearest mech to the middle.
 
+### Combat
+
+![A close fight: the Starslayer losing its arms to lasers and Streaks](docs/screenshots/battle-close.jpg)
+
+Combat follows MC2's own code (`code/mover.cpp`, `mech.cpp`, `gvehicl.cpp`) on
+data the converter exports to `combat.json`: weapons from `compbas.csv`, each
+mech's armour, structure, loadout and crit slots from its stats CSV, vehicles
+from their object files, and each pilot's gunnery from the mission's warrior
+profiles. In short:
+
+- Every quarter second each unit picks a target (the one it was ordered to
+  attack, else the nearest enemy its side can see within 275 m; sight is 225 m
+  and the ground blocks it). Enemies close to their best range; your mechs hold
+  their ground unless ordered to attack, and fire at whatever comes in range.
+- Every loaded weapon in its range band (short, medium, long), in sight and
+  within 12.5° of where the torso points fires; a mech's torso turns 120° either
+  way. Lasers and PPCs strike at once, shells and missiles fly at the original
+  speeds and do their damage when they land.
+- A shot hits when d100 is under the pilot's gunnery (5–95%): nothing else
+  changes the odds in the original. Where it lands depends on the side it came
+  from. Damage goes through armour, then structure (with critical hits: engine,
+  cockpit, weapons, exploding ammunition), then inward. Heat isn't modelled,
+  because the original compiles it out.
+- Destroyed mechs fall, explode and burn, and are redrawn as burnt-out wrecks.
+  Health bars show over the selection and anything damaged, and the battle log
+  reports kills and lost limbs.
+
+`src/sea/README.md` has the details, and how they were checked against a
+simulation of the original rules.
+
+### Rendering
+
 The sea, sky, surf and post-processing come from the dreadnought game; see
 `src/sea/README.md` for what was taken and what changed. MC2's land wears its
 pre-lit colour map, and the sea shows the sea floor through shallow water. Every
@@ -67,17 +108,43 @@ model is one vertex buffer whose vertices name the node they move with, so all
 the mechs of one type are a single instanced draw. The sun's shadows fade out as
 the camera zooms out (700–1000 m).
 
-**Run sea survey** (top left) measures what the sea, land, buildings, units,
-shadows, sky, bloom and resolution each cost per frame. It uses two fixed views:
-the opening view, and the whole map zoomed out (mostly sea). It renders several
-frames per display refresh, until one interval spans at least six refreshes, so
-the 60 fps cap can't hide the cost; each row is a range accurate to about a
-sixth. The report is POSTed to `/api/perf` and saved in `perf-reports/`. URL
-options: `q=B` for 128² waves instead of 256², `msaa=1`, and `scale=` for a
+### Performance surveys
+
+Three buttons (top left) measure the game on the device it runs on. Each report
+is POSTed to `/api/perf` and saved in `perf-reports/`.
+
+- **Run sea survey** measures what the sea, land, buildings, units, shadows,
+  sky, bloom and resolution each cost per frame, from two fixed views: the
+  opening view, and the whole map zoomed out (mostly sea). It renders several
+  frames per display refresh, until one interval spans at least six refreshes,
+  so the 60 fps cap can't hide the cost; each row is a range accurate to about a
+  sixth.
+- **Run battle survey** puts every unit on the map (23) into one fight on open
+  ground. It measures the same way with the fight running and nobody able to be
+  hurt, so the fire stays steady (standing, fighting, without effects, without
+  shadows, at 75%), then plays the fight in real time until one side is
+  destroyed, recording frame intervals, JavaScript time and peak particles.
+- **Run pacing survey** plays the opening view in real time nine ways, taking
+  away one suspect at a time (the GPU timer, HUD updates, the model matrix
+  upload, resolution, most of the scene, everything but a cleared screen), to
+  find what makes frames late.
+
+URL options: `q=B` for 128² waves instead of 256², `msaa=1`, and `scale=` for a
 fixed render scale.
 
-On an iPad Air M2 the opening view costs 3.0–3.5 ms per frame and the whole map
-zoomed out 10.0–10.6 ms, against 16.7 ms at 60 fps.
+On an iPad Air M2, against 16.7 ms a frame at 60 fps:
+
+| | GPU per frame |
+|---|---|
+| Opening view | 3.0–3.5 ms |
+| Whole map zoomed out | 10.0–10.6 ms (the sea is about 6 ms of it) |
+| All 23 units fighting, wide or close | 3.3–4.4 ms (effects cost next to nothing) |
+
+In real time the page holds 60.0 fps from the opening view in every pacing
+variant. A whole 23-unit fight, played after the battle survey's stress rows,
+ran at 57.4 fps with no frame over 31 ms and 2–5 ms of JavaScript a frame; ten
+seconds of standing still at that point paced the same, so the shortfall is the
+device after minutes of stress rendering, not the fight.
 
 ## The viewer (WebGL)
 
@@ -96,15 +163,19 @@ adapter's features. The report goes to the same `/api/perf` endpoint.
 |---|---|
 | `tools/fetch-srcdata.ts` | Sparse, blobless checkout of [alariq/mc2srcdata](https://github.com/alariq/mc2srcdata), resolving the files a mission needs |
 | `tools/convert.ts` | Mission → `public/assets/maps/<mission>/` and `public/assets/models/` |
-| `tools/lib/` | Readers for `.pak`, `.fit`, `.tga`, `.ase` and remote zips, plus the glTF builder |
+| `tools/lib/` | Readers for `.pak`, `.fit`, `.tga`, `.ase` and remote zips, the glTF builder, and the combat data export |
 | `src/sea/` | The WebGPU game (`main.ts`, `app/`, `models/`, `render/`, `sim/`) |
+| `src/sea/sim/combat.ts`, `src/sea/app/battle.ts` | MC2's combat rules, and the battle that runs on them |
+| `docs/screenshots/` | The pictures in this README |
 | `src/*.ts` | The three.js viewer; `src/paint.ts` and `src/assets.ts` are shared |
 | `vendor/`, `public/assets/` | Downloaded and generated data; git-ignored |
 
 Converted output per mission: `map.json` (terrain size, water, light, camera
 start), `elevation.bin` (Float32 heights), `colormap.webp`, `objects.json`
-(about 1,000 placed buildings and trees), `units.json` (mission units plus
-gesture speeds), and `move.bin` (the 300×300 movement grid).
+(about 1,000 placed buildings and trees), `units.json` (mission units with their
+pilots' gunnery, plus gesture speeds), `combat.json` (weapons, ammunition, and
+each unit type's armour, structure, loadout and crit slots), and `move.bin` (the
+300×300 movement grid).
 
 ## How the conversion follows the engine
 
@@ -141,7 +212,17 @@ Checks done against mc2_01:
 
 - `alariq/mc2srcdata` has no models for some objects (a few rocks, mech wreck pieces,
   nav markers, infantry, the outhouse). The converter skips them and lists them.
-- Vehicles are static, and prop animations (flags, radar) are not converted.
+- Vehicles drive, but their turrets don't turn: the converter flattens each
+  vehicle into one node, though the files name a turret node (`sc_turret`). Prop
+  animations (flags, radar) are not converted.
+- The data's damage models aren't used yet. MC2 hides a destroyed arm's nodes and
+  throws a separate arm mesh (`<mech>leftarm.ase`, `rightarm.ase`) tumbling off
+  with a smoke trail; a destroyed mech, once fallen, becomes a damaged wreck mesh
+  (`<mech>fallforwarddam.ase`, `fallbackwarddam.ase`); a destroyed vehicle becomes
+  `<vehicle>dam.ase` with a `dam` texture. Here arms stay on (their weapons just
+  stop), and wrecks are the intact model painted in soot.
+- Trees don't block sight, there's no fog of war, and enemies close and fire
+  rather than following the mission's scripts.
 - The original 1280² colour map is blurry close up; use `--upscaled`.
 - Headless browsers on an Intel Mac can't stand in for an iPad when timing (they
   render even a near-empty scene at ~15 fps); measure on the device.
@@ -154,4 +235,5 @@ redistributed **for non-commercial purposes only**, and the licence grants no ri
 to Microsoft's trademarks (see `EULA.txt` in the engine repository). That's why
 `vendor/` and `public/assets/` are git-ignored: anyone building this fetches and
 converts the data themselves. The `--upscaled` textures are the remaster author's AI
-upscales of the same art, so the same non-commercial terms apply.
+upscales of the same art, so the same non-commercial terms apply, as they do to the
+screenshots in `docs/screenshots/`, which show it.
