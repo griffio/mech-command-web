@@ -18,9 +18,11 @@ import { DEFAULT_SEA, SeaRenderer, type SeaQuality } from './render/sea-renderer
 import { SurfLines } from './sim/terrain/surf';
 import { Terrain } from './sim/terrain/terrain';
 import { mc2TerrainGrid, upsampleGrid } from './app/mc2-map';
+import { BattleSounds } from './app/battle-sounds';
 import { Callouts } from './app/callouts';
 import { CommanderAI } from './app/match';
 import { MatchHud } from './app/match-hud';
+import { Music } from './app/music';
 import { Notice } from './app/notice';
 import { Sound } from './app/sound';
 import type { Squad } from './app/squads';
@@ -126,13 +128,16 @@ async function main() {
   );
   controls.groundAt = (x, z) => terrain.heightAt(x, z);
 
-  // The squads' radio, Betty and the interface's sounds, and the notice line: with a match.
+  // The squads' radio, Betty, the interface's and the battle's sounds, the music, and the notice line: with a match.
   const notice = new Notice(document.getElementById('notice')!);
   const sound = world.match ? await Sound.load() : null;
-  const callouts = world.match ? new Callouts(world, world.match, sound, notice) : null;
+  const tunes = sound?.file.music;
+  const music = sound && tunes ? new Music(sound, tunes, tunes.mission[mapName] ?? 0) : null;
+  const callouts = world.match ? new Callouts(world, world.match, sound, music, notice) : null;
+  const battleSounds = sound ? new BattleSounds(world.battle, sound, music, camera) : null;
   if (sound) {
     void sound.preload();
-    mountSoundToggle(sound);
+    mountAudioToggles(sound, music);
   }
   mountOrders(canvas, camera, world, notice, sound, callouts);
   const bars = new UnitBars(document.getElementById('bars')!);
@@ -236,6 +241,8 @@ async function main() {
     for (let i = 0; i < speed; i++) world.update(dt, !survey.running || survey.worldLive);
     callouts?.update();
     if (sound) sound.enabled = !survey.running;
+    battleSounds?.listen(controls.target, controls.distance);
+    music?.update();
     if (!survey.quietHud) {
       bars.update(world, camera, canvas.clientWidth, canvas.clientHeight);
       hud?.update(camera, canvas.clientWidth, canvas.clientHeight);
@@ -276,7 +283,7 @@ async function main() {
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
-  Object.assign(window, { sea: { sea, camera, controls, terrain, sizer, survey, world, sound, callouts, CommanderAI } });
+  Object.assign(window, { sea: { sea, camera, controls, terrain, sizer, survey, world, sound, music, callouts, CommanderAI } });
 }
 
 /**
@@ -391,19 +398,24 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
   });
 }
 
-/** The sound on/off button (remembered between visits). */
-function mountSoundToggle(sound: Sound): void {
-  const button = document.getElementById('sound-toggle') as HTMLButtonElement;
-  const show = () => {
-    button.setAttribute('aria-pressed', String(!sound.isMuted));
-    button.textContent = sound.isMuted ? 'Sound off' : 'Sound on';
-  };
-  button.hidden = false;
-  show();
-  button.addEventListener('click', () => {
-    sound.setMuted(!sound.isMuted);
+/** The sound and music on/off buttons (remembered between visits). */
+function mountAudioToggles(sound: Sound, music: Music | null): void {
+  const toggle = (id: string, name: string, on: () => boolean, set: (on: boolean) => void) => {
+    const button = document.getElementById(id) as HTMLButtonElement;
+    const show = () => {
+      button.setAttribute('aria-pressed', String(on()));
+      button.textContent = `${name} ${on() ? 'on' : 'off'}`;
+    };
+    button.hidden = false;
     show();
-  });
+    button.addEventListener('click', () => {
+      set(!on());
+      show();
+    });
+  };
+  document.getElementById('audio-toggles')!.hidden = false;
+  toggle('sound-toggle', 'Sound', () => !sound.isMuted, (on) => sound.setMuted(!on));
+  if (music) toggle('music-toggle', 'Music', () => music.isOn, (on) => music.setOn(on));
 }
 
 function describeSelection(world: World): string {

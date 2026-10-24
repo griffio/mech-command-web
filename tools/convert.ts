@@ -12,8 +12,10 @@
 //   maps/<mission>/units.json      mission units, mech animation metadata, and the scenarios' unit types and props
 //   maps/<mission>/combat.json     weapons, ammunition, and each unit type's armour and loadout
 //   models/props/*.glb, models/mechs/*.glb
-//   sound/sound.json               the squads' voices, Betty's lines and interface effects (sound/**/*.wav, as MC2's)
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+//   sound/sound.json               the squads' voices, Betty's lines, interface, weapon and explosion effects
+//                                  (sound/**/*.wav, as MC2's), and the tunes (sound/music/*.m4a, encoded with ffmpeg)
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import sharp from 'sharp';
@@ -31,7 +33,7 @@ import {
 import { ComponentTable, readGunnery, readMechStats, readTurretStats, readVehicleStats, type MechStats, type VehicleStats } from './lib/combat-data.ts';
 import { buildModel, TextureLibrary } from './lib/model.ts';
 import { readScenarios, scenarioNeeds } from './lib/scenario.ts';
-import { soundSet } from './lib/sound.ts';
+import { missionTune, soundSet } from './lib/sound.ts';
 import { SourceData } from './lib/srcdata.ts';
 import { decodeTga } from './lib/tga.ts';
 
@@ -296,18 +298,45 @@ json('manifest.json', { maps: [missionName] });
 
 // --- Sound -----------------------------------------------------------------------
 // MC2's WAVs as they are (mono PCM, 11 or 22 kHz: a second or two each), which every browser decodes.
-const sounds = soundSet(src, needs.voices);
+const sounds = soundSet(src, needs.voices, { name: missionName, tune: missionTune(fit) }, usedWeapons);
 let soundBytes = 0;
 for (const [rel, from] of sounds.files) {
   if (src.has(from)) soundBytes += write(`sound/${rel}`, src.read(from));
   else console.warn(`  missing sound ${from}: run npm run fetch-data`);
+}
+// The tunes are MS ADPCM, 44 kHz stereo (about 5 MB a minute): encoded to AAC, which Safari, Chrome and Firefox play.
+const ffmpeg = (() => {
+  try {
+    execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+let musicBytes = 0;
+if (!ffmpeg) {
+  console.warn('  no ffmpeg on the PATH: the game will have no music');
+  sounds.manifest.music = null;
+} else {
+  for (const [rel, from] of sounds.tunes) {
+    const target = join(out, 'sound', rel);
+    mkdirSync(dirname(target), { recursive: true });
+    // Encoding takes a while; a tune already encoded since its source last changed is kept.
+    if (!existsSync(target) || statSync(target).mtimeMs < statSync(src.resolve(from)!).mtimeMs) {
+      execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', src.resolve(from)!, '-c:a', 'aac', '-b:a', '80k', '-movflags', '+faststart', target]);
+    }
+    musicBytes += statSync(target).size;
+  }
 }
 json('sound/sound.json', sounds.manifest);
 
 console.log(
   `${models.specs.size} models (${(totalBytes / 1024 / 1024).toFixed(1)} MB), ${placed.length}/${mission.objects.length} objects placed, ${units.length}/${mission.parts.length} units`,
 );
-console.log(`${sounds.files.size} sounds (${(soundBytes / 1024 / 1024).toFixed(1)} MB) for ${needs.voices.length} voices`);
+console.log(
+  `${sounds.files.size} sounds (${(soundBytes / 1024 / 1024).toFixed(1)} MB) for ${needs.voices.length} voices, ${Object.keys(sounds.manifest.weapons).length} weapons; ` +
+    `${ffmpeg ? sounds.tunes.size : 0} tunes (${(musicBytes / 1024 / 1024).toFixed(1)} MB)`,
+);
 for (const [reason, n] of models.unresolved) console.warn(`  skipped ${n}x ${reason}`);
 if (textures.missing.size) console.warn(`  missing textures: ${[...textures.missing].join(', ')}`);
 if (upscaled) console.log(`  ${textures.upscaledCount} model textures from the 4x upscales`);

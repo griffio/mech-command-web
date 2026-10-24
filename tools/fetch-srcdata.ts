@@ -14,7 +14,7 @@ import { parseAse } from './lib/ase.ts';
 import { collectMissionModels, readMission } from './lib/mission.ts';
 import { RemoteZip } from './lib/remote-zip.ts';
 import { readScenarios, scenarioNeeds } from './lib/scenario.ts';
-import { soundLists, soundSet } from './lib/sound.ts';
+import { missionTune, soundLists, soundSet } from './lib/sound.ts';
 import { SourceData } from './lib/srcdata.ts';
 
 const REPO = 'https://github.com/alariq/mc2srcdata.git';
@@ -96,9 +96,11 @@ for (const spec of models.specs.values()) {
 }
 checkout('textures', [...textures]);
 
-// 4. Sounds: the radio table and the lists the files are named in, then the squads' voices, Betty and the effects.
+// 4. Sounds: the radio and effects tables and the lists the files are named in, then the squads' voices, Betty, the
+//    effects, weapons and explosions, and the tunes.
 checkout('sound lists', soundLists(needs.voices).map((p) => tree.actual(p)).filter((p): p is string => p !== null));
-checkout('sounds', [...soundSet(tree, needs.voices).files.values()]);
+const sounds = soundSet(tree, needs.voices, { name: mission, tune: missionTune(missionData.fit) });
+checkout('sounds', [...sounds.files.values(), ...sounds.tunes.values()]);
 
 for (const [reason, n] of models.unresolved) console.warn(`  skipped ${n}x ${reason}`);
 console.log(`done: ${models.specs.size} models for ${mission}`);

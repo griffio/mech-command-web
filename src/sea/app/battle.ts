@@ -3,7 +3,7 @@
 // they do in MC2 (lasers at once, shells and missiles at their speeds) and do their damage when they land. Destroyed
 // units fall, blow up and burn.
 import type { CombatEffects } from '../render/fx/combat-effects';
-import type { MechLocation } from '../../assets';
+import type { Blast, MechLocation } from '../../assets';
 import { ATTACK_RADIUS, COMBAT_TICK, FIRE_ARC, SIGHT_RANGE, arcOf, bestRange, inRange, type HitReport, type WeaponMount } from '../sim/combat';
 import { Rng } from '../sim/rng';
 import { PLAYER_TEAM, bearing, wrapDegrees, type SeaUnit, type World } from './world';
@@ -43,9 +43,16 @@ const HIT_NODE: Record<string, string> = {
   'left arm': 'weapon_leftarm', 'right arm': 'weapon_rightarm', 'left leg': 'joint_llleg', 'right leg': 'joint_rlleg',
 };
 
+/** A sound the fight makes, and where (the battle's sounds pick MC2's for it). */
+export type Noise =
+  | { kind: 'fire'; weapon: number; at: V3; by: SeaUnit }
+  | { kind: 'impact'; weapon: number; at: V3; on: SeaUnit; by: SeaUnit }
+  | { kind: 'blast'; blast: Blast; at: V3; on: SeaUnit };
+
 /** Damage on its way: it lands at `at` (game time) unless its target is already gone. */
 interface Payload {
   at: number;
+  weapon: WeaponMount['def'];
   attacker: SeaUnit;
   target: SeaUnit;
   /** Null for a miss. */
@@ -95,6 +102,8 @@ export class Battle {
   onDestroyed: (u: SeaUnit, by: SeaUnit) => void = () => {};
   /** Called when a shot damages a unit that survives it (the radio: under attack). */
   onHit: (u: SeaUnit, by: SeaUnit) => void = () => {};
+  /** Called for each weapon fired, shot landed and unit blown up (the battle's sounds). */
+  onNoise: (n: Noise) => void = () => {};
   /** Decide the battle when one side is wiped out (a match decides its own). */
   judgeOutcome = true;
   private tickIn = 0;
@@ -277,8 +286,9 @@ export class Battle {
     const location = hit ? t.combat!.hitLocation(arcOf(t.x, t.z, t.rotation, u.x, u.z), this.rng) : null;
     const point = location ? this.hitPoint(t, location) : this.missPoint(t);
     const from = this.muzzle(u, w);
+    this.onNoise({ kind: 'fire', weapon: def.id, at: from, by: u });
     const scale = Math.min(Math.max(def.damage / 4, 0.4), 2);
-    const payload = (at: number, impact: boolean): Payload => ({ at, attacker: u, target: t, location, damage: def.damage, point, impact, scale });
+    const payload = (at: number, impact: boolean): Payload => ({ at, weapon: def, attacker: u, target: t, location, damage: def.damage, point, impact, scale });
     const name = def.name.toLowerCase();
     if (def.kind === 'energy') {
       if (name.includes('ppc')) this.fx.ppc(from, point, hit);
@@ -360,6 +370,8 @@ export class Battle {
   /** A shot lands: the impact, then the damage, and what that breaks. */
   private strike(p: Payload): void {
     const t = p.target;
+    // A laser that misses hits nothing to hear.
+    if (p.location || p.weapon.kind !== 'energy') this.onNoise({ kind: 'impact', weapon: p.weapon.id, at: p.point, on: t, by: p.attacker });
     if (p.impact) {
       if (p.location) this.fx.hit(p.point, p.scale);
       else this.fx.groundHit(p.point, 0.5 * p.scale + 0.3, this.world.terrain.heightAt(p.point[0], p.point[2]) < 0);
@@ -376,6 +388,7 @@ export class Battle {
   private wounded(t: SeaUnit, report: HitReport, point: V3): void {
     if (report.exploded) this.fx.explosion(point, 0.45);
     else if (report.destroyed.length) this.fx.explosion(point, 0.3);
+    if (report.exploded || report.destroyed.length) this.onNoise({ kind: 'blast', blast: 'crit', at: point, on: t });
     if (report.destroyed.length && t.kind === 'mech') this.onEvent(`${t.name} lost its ${report.destroyed.join(' and ')}`, t.team);
   }
 
@@ -398,6 +411,7 @@ export class Battle {
     }
     const at = t.nodePosition('weapon_centertorso') ?? [...t.instance.center];
     this.fx.explosion(at, t.kind === 'mech' ? 1 : 0.75);
+    this.onNoise({ kind: 'blast', blast: t.kind === 'mech' ? 'mech' : t.kind === 'structure' ? 'structure' : 'vehicle', at, on: t });
     if (report.exploded) this.fx.explosion(at, 0.8);
     this.wrecks.push({ unit: t, since: this.time, nextPuff: this.time + 0.3, drawn: false });
     const side = (u: SeaUnit) => (u.team === PLAYER_TEAM ? '' : 'enemy ');

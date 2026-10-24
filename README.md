@@ -24,7 +24,7 @@ Screenshots are from headless Chrome on a Mac, at full render scale.
 ```bash
 npm install
 npm run fetch-data       # sparse-clones only what mission mc2_01 needs (~46 MB) into vendor/
-npm run convert          # writes public/assets/ (~6 MB)
+npm run convert          # writes public/assets/: maps, models and sound (ffmpeg encodes the music)
 npm run dev:https        # https://localhost:5173, also on your LAN for an iPad
 ```
 
@@ -32,6 +32,9 @@ WebGPU only exists in secure contexts, so open the HTTPS address on an iPad and
 accept the self-signed certificate once (Show Details → visit this website).
 Plain `npm run dev` works on the Mac itself (localhost counts as secure); from
 another device over HTTP the game falls back to the viewer.
+
+The converter encodes MC2's music to AAC with `ffmpeg` (`brew install ffmpeg`);
+without it on the PATH the game simply has no music.
 
 Options (both scripts): `--mission mc2_05` picks another mission, and
 `--extra-mechs atlas,madcat` adds mechs the mission doesn't use (the defaults
@@ -140,6 +143,16 @@ AI commander.
   buzz, and the alarm sounds when the enemy starts taking one of your points.
   **Sound on/off** (top right) is remembered. On iPad, sound starts with the
   first tap and plays even with the silent switch on.
+- **Battle sounds and music.** Weapons fire with MC2's sounds, the ones the
+  engine plays for each (a weapon's effect names its bolt, whose file names the
+  sound), at MC2's volumes; shots land with MC2's hit explosion sounds, and mechs,
+  vehicles and the forward base's tent blow up with its explosions. Sounds fade
+  with distance from what the camera looks at (and as it zooms out), are panned
+  to the side of the screen they're on, and you only hear the enemies your side
+  can see. A few at most play at once, and the fight quietens while someone
+  speaks on the radio. The music is MC2's: the mission's own tune to open, the
+  ambient tune while it's quiet, the combat tunes while your squads fight, and
+  the win or lose tune at the end. **Music on/off** sits by the sound button.
 
 The AI sends most of its squads at the point it can take next, holds the
 one it must keep with the rest, stands its LRM carriers off behind the attack,
@@ -264,8 +277,11 @@ pilots' gunnery, plus gesture speeds), `combat.json` (weapons, ammunition, and
 each unit type's armour, structure, loadout and crit slots), and `move.bin` (the
 300×300 movement grid). Shared by every mission: `sound/sound.json` (each radio
 message's priority and shelf life from `radio.csv`, the scenarios' voices' lines
-for each message, Betty's lines by their `BETTY_*` number, and interface effects)
-and MC2's WAVs as they are (about 3.4 MB for five voices).
+for each message, Betty's lines by their `BETTY_*` number, interface effects, each
+weapon's firing and impact sounds, the explosions, and the tunes), MC2's WAVs as
+they are (6.6 MB: five voices, then weapons and explosions), and
+`sound/music/*.m4a`, ten of MC2's tunes encoded to AAC (4.7 MB, fetched one at a
+time as they play).
 
 ## How the conversion follows the engine
 
@@ -313,8 +329,11 @@ Checks done against mc2_01:
   stop), and wrecks are the intact model painted in soot.
 - Trees don't block sight, and enemies close and fire rather than following the
   mission's scripts.
-- There are no weapon, explosion or footstep sounds, and no music, though MC2's
-  are in the source data (`sound/sfx_*.wav`, `sound/music*.wav`).
+- MC2's weapon bolts name no hit explosion, so the original played no sound for a
+  shot landing: the impacts here are MC2's hit explosion objects' sounds, picked
+  by the effects table's hit effect. There are no footstep, Karnov or weather
+  sounds yet, and when each tune plays is this project's rule (MC2 left that to
+  each mission's script).
 - The original 1280² colour map is blurry close up; use `--upscaled`.
 - Headless browsers on an Intel Mac can't stand in for an iPad when timing (they
   render even a near-empty scene at ~15 fps); measure on the device.

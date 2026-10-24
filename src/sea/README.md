@@ -48,7 +48,9 @@ New:
   `app/match-hud.ts`: the ticket and point bar, the squad cards, and squad letters over the field.
   `app/sound.ts`: MC2's radio, Betty and interface sounds through Web Audio, queued by MC2's radio rules.
   `app/callouts.ts`: what the squads and Betty say, and the notices, as orders are given and the match goes.
-  `app/notice.ts`: the line under the top bar (refusals, alerts, what to tap next). `app/mc2-map.ts`: MC2 heights in metres and a bilinear upsample. `app/orbit-controls.ts`:
+  `app/notice.ts`: the line under the top bar (refusals, alerts, what to tap next). `app/battle-sounds.ts`: weapons,
+  impacts and explosions, by distance and side from the camera's view. `app/music.ts`: MC2's tunes by the state of
+  the match. `app/mc2-map.ts`: MC2 heights in metres and a bilinear upsample. `app/orbit-controls.ts`:
   the RTS camera with touch. `main.ts`.
 - `../paint.ts` (shared with the three.js viewer): MC2's team paint.
 

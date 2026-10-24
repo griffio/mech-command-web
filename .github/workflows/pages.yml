@@ -43,6 +43,10 @@ jobs:
       - name: Fetch MC2 source data
         run: npm run fetch-data -- --upscaled
 
+      # The converter encodes MC2's music to AAC with ffmpeg.
+      - name: Install ffmpeg
+        run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg)
+
       - name: Convert the mission
         run: npm run convert -- --upscaled
 

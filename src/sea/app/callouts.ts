@@ -1,13 +1,15 @@
 // What the player hears and reads as a match goes. Their squads answer orders over the radio in their pilots' voices
 // (MC2's lines: acknowledged, can't do that, can't get there) and call out contacts, attacks, crippling damage, kills
 // and finished refits. Betty announces points taken, forward bases under attack or lost, supply run out, and the
-// result. Refused orders and alerts also show in the middle of the screen, with MC2's buzz or alarm.
+// result, over the win or lose tune. Refused orders and alerts also show in the middle of the screen, with MC2's buzz
+// or alarm.
 //
 // MC2 says these lines when it does (code/tacordr.cpp, warrior.cpp, mech.cpp, mover.cpp); how often a squad repeats
 // itself is this project's own choice, so that a long fight isn't a running commentary.
 import type { RadioMessage } from '../../assets';
 import type { Fob } from './logistics';
 import type { Match, MatchSignal } from './match';
+import type { Music } from './music';
 import type { Notice } from './notice';
 import type { Sound } from './sound';
 import type { Squad } from './squads';
@@ -44,6 +46,7 @@ export class Callouts {
     private readonly world: World,
     private readonly match: Match,
     private readonly sound: Sound | null,
+    private readonly music: Music | null,
     private readonly notice: Notice,
   ) {
     world.onOrders = (reports) => this.ordered(reports);
@@ -116,6 +119,7 @@ export class Callouts {
         if (own) this.notice.show(`${s.point.name} lost`, 'alert');
         return;
       case 'ended':
+        this.music?.ended(s.winner === PLAYER_TEAM);
         return this.sound?.announce(s.winner === PLAYER_TEAM ? 'won' : 'lost');
       case 'fobBuilt':
         if (!own) return;
