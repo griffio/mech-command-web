@@ -16,7 +16,7 @@ import { DEFAULT_SEA, SeaRenderer, type SeaQuality } from './render/sea-renderer
 import { SurfLines } from './sim/terrain/surf';
 import { Terrain } from './sim/terrain/terrain';
 import { mc2TerrainGrid, upsampleGrid } from './app/mc2-map';
-import { World } from './app/world';
+import { PLAYER_TEAM, World } from './app/world';
 
 /** The dreadnought game's pixel budget: a Retina iPad canvas is about 5.6 MP, more than the sea needs. */
 const MAX_PIXELS = 3_600_000;
@@ -106,20 +106,7 @@ async function main() {
   );
   controls.groundAt = (x, z) => terrain.heightAt(x, z);
 
-  // Tap a unit to select it; tap the ground to send the selected mech there.
-  let down: { x: number; y: number; t: number } | null = null;
-  canvas.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY, t: performance.now() }));
-  canvas.addEventListener('pointerup', (e) => {
-    if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 8 || performance.now() - down.t > 400) return;
-    const rect = canvas.getBoundingClientRect();
-    const hit = world.pick(camera, ((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
-    if (!hit) return;
-    if (Array.isArray(hit)) {
-      if (world.selected?.kind === 'mech') world.selected.walkTo([hit]);
-    } else {
-      world.select(hit);
-    }
-  });
+  mountOrders(canvas, camera, world);
 
   const sizer = new CanvasSizer(canvas, gpu.device.limits.maxTextureDimension2D, (w, h) => sea.resize(w, h), MAX_PIXELS);
   if (fixedScale !== null) sizer.renderScale = fixedScale;
@@ -199,8 +186,7 @@ async function main() {
         `JS ${cpuMs.toFixed(1)} ms${gpuMs ? ` · GPU ~${gpuMs.toFixed(1)} ms` : ''} · ocean ${quality.oceanSize}² · ` +
         `${Math.round(sea.oceanArc.drawnFraction * 100)}% of the sea grid · land ${sea.landStats.tiles} tiles · ` +
         `${sea.models.drawnInstances} objects drawn, ${sea.models.shadowInstances} casting shadows`;
-      const sel = world.selected;
-      selection.textContent = sel ? `Selected: ${sel.name} (${sel.kind})${sel.kind === 'mech' ? ' · tap the ground to walk there' : ''}` : '';
+      selection.textContent = describeSelection(world);
       fpsFrames = 0;
       fpsSince = now;
     }
@@ -208,6 +194,79 @@ async function main() {
   };
   requestAnimationFrame(frame);
   Object.assign(window, { sea: { sea, camera, controls, terrain, sizer, survey, world } });
+}
+
+/**
+ * Orders by touch or mouse. A tap on one of the player's mechs selects it alone; a long press (or a shift-click) adds it
+ * to the selection or takes it out. A tap on another unit shows what it is. A tap on the ground sends the selection
+ * there. Drags and two-finger gestures belong to the camera and are never taps.
+ */
+function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World) {
+  const LONG_PRESS_MS = 450;
+  const SLOP_PX = 8;
+  const pointers = new Set<number>();
+  let press: { x: number; y: number; t: number; timer: number; handled: boolean; cancelled: boolean } | null = null;
+  const pickAt = (x: number, y: number) => {
+    const rect = canvas.getBoundingClientRect();
+    return world.pick(camera, ((x - rect.left) / rect.width) * 2 - 1, -((y - rect.top) / rect.height) * 2 + 1);
+  };
+  const cancel = () => {
+    if (press) {
+      window.clearTimeout(press.timer);
+      press.cancelled = true;
+    }
+  };
+  canvas.addEventListener('pointerdown', (e) => {
+    pointers.add(e.pointerId);
+    // Only the primary button (or a finger) gives orders; the right button turns the camera.
+    if (pointers.size > 1 || e.button !== 0) return cancel();
+    const p = { x: e.clientX, y: e.clientY, t: performance.now(), timer: 0, handled: false, cancelled: false };
+    p.timer = window.setTimeout(() => {
+      if (p.cancelled) return;
+      const hit = pickAt(p.x, p.y);
+      if (hit && !Array.isArray(hit)) {
+        world.tapUnit(hit, true);
+        p.handled = true;
+      }
+    }, LONG_PRESS_MS);
+    press = p;
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > SLOP_PX) cancel();
+  });
+  const end = (e: PointerEvent) => {
+    pointers.delete(e.pointerId);
+    const p = press;
+    if (!p || e.type === 'pointercancel') return cancel();
+    window.clearTimeout(p.timer);
+    press = null;
+    if (p.cancelled || p.handled || Math.hypot(e.clientX - p.x, e.clientY - p.y) > SLOP_PX) return;
+    const hit = pickAt(e.clientX, e.clientY);
+    if (!hit) return;
+    if (Array.isArray(hit)) world.orderMove(hit[0], hit[1]);
+    else world.tapUnit(hit, e.shiftKey);
+  };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+
+  const run = document.getElementById('cmd-run') as HTMLButtonElement;
+  document.getElementById('cmd-all')!.addEventListener('click', () => world.selectAll());
+  document.getElementById('cmd-stop')!.addEventListener('click', () => world.stopSelected());
+  run.addEventListener('click', () => {
+    const on = run.getAttribute('aria-pressed') !== 'true';
+    run.setAttribute('aria-pressed', String(on));
+    world.setRunning(on);
+  });
+}
+
+function describeSelection(world: World): string {
+  if (world.inspected) {
+    const u = world.inspected;
+    return `${u.team === PLAYER_TEAM ? '' : 'Enemy '}${u.name} (${u.kind})`;
+  }
+  const names = [...world.selected].map((u) => u.name);
+  if (!names.length) return 'Tap one of your mechs to select it, or Select all';
+  return `${names.join(', ')} · tap the ground to move ${names.length > 1 ? 'them' : 'it'}`;
 }
 
 /** The panel's button runs the survey and POSTs the report to the dev server (see vite.config.ts). */

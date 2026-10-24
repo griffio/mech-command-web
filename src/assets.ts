@@ -25,6 +25,8 @@ export interface MapInfo {
   };
   light: { sun: [number, number, number]; color: [number, number, number]; ambient: [number, number, number] };
   camera: { x: number; y: number; rotation: number };
+  /** MC2's movement map: width x height cells of Uint32 flags (mclib/move.h), 3 to a terrain tile. */
+  move: { file: string; width: number; height: number } | null;
 }
 
 export interface ObjectsFile {

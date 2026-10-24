@@ -48,8 +48,17 @@ memory with mipmaps, against about 140 MB at full size). Model textures are capp
 ## The game (WebGPU)
 
 Controls: drag to pan, right-drag or two fingers to turn and tilt, scroll or
-pinch to zoom, tap a unit to select it, and tap the ground to walk the selected
-mech there.
+pinch to zoom. Tap one of your mechs to select it, long-press (or shift-click)
+to add one to the selection or take it out, or use **Select all**; tap the ground
+to send the selection there. **Stop** halts them and **Run** makes them run. A tap
+on an enemy shows what it is.
+
+Your lance is the mission's three mechs plus the Atlas and Madcat. Orders are
+routed over MC2's movement map (`src/sea/sim/move-grid.ts`): A* over its
+300×300 cells of 8.5 m with the engine's rules (no off-map cells or deep water,
+shallow water and passable ground only, forest about 2.8× the cost of clear
+ground), then pulled tight so routes only turn where something is in the way. A
+group's mechs take formation slots about the point, nearest mech to the middle.
 
 The sea, sky, surf and post-processing come from the dreadnought game; see
 `src/sea/README.md` for what was taken and what changed. MC2's land wears its

@@ -1,23 +1,27 @@
-// MC2's buildings, trees and units on the WebGPU sea page: the same placements as the three.js viewer (src/props.ts,
-// src/units.ts), in metres (MC2 units / 5.01) and the dreadnought game's axes (x east, y up, z south).
-import { ASSET_ROOT, loadJson, type MapInfo, type MechInfo, type ObjectsFile, type UnitsFile } from '../../assets.ts';
+// MC2's buildings, trees and units on the WebGPU page, in metres (MC2 units / 5.01) and the dreadnought game's axes
+// (x east, y up, z south): placement, the two sides, selection, and move orders routed over MC2's movement map.
+import { ASSET_ROOT, loadBinary, loadJson, type MapInfo, type MechInfo, type ObjectsFile, type UnitsFile } from '../../assets.ts';
 import { PLAYER_PAINT, paintFromMission, type PaintScheme } from '../../paint.ts';
 import type { Camera } from '../render/camera';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import type { SeaRenderer } from '../render/sea-renderer';
 import { parseGlb, type ModelData } from '../models/glb';
 import { AFFINE_FLOATS, Animator, mulAffine, placement, restPose } from '../models/pose';
+import { MoveGrid } from '../sim/move-grid';
 import type { Terrain } from '../sim/terrain/terrain';
 
 const TURN_RATE = 120; // degrees per second
-const ARRIVE_M = 5;
+const ARRIVE_M = 4;
 /** The land's colour map is shown at this brightness (map-ground DEFAULT_MAP_LOOK); models match it. */
 const GAIN = 1.35;
+/** Metres between mechs in a group's formation at its destination. */
+const FORMATION_SPACING = 16;
+/** The player's own side (team 0 in the mission file). */
+export const PLAYER_TEAM = 0;
 
 export class SeaUnit {
-  /** Patrol or destination, world x and z (metres); empty when standing. */
+  /** Waypoints still to walk, world x and z (metres); empty when standing. */
   route: [number, number][] = [];
-  loopRoute = false;
   running = false;
   private routeIndex = 0;
   private readonly frame = new Float32Array(AFFINE_FLOATS);
@@ -25,6 +29,7 @@ export class SeaUnit {
   constructor(
     readonly name: string,
     readonly kind: 'mech' | 'vehicle',
+    readonly team: number,
     readonly instance: ModelInstance,
     private readonly animator: Animator | null,
     private readonly rest: Float32Array,
@@ -35,6 +40,11 @@ export class SeaUnit {
     /** MC2 rotation, degrees: the unit faces (sin r, cos r) in x, z (0 faces south). */
     public rotation: number,
   ) {}
+
+  /** A unit the player can give orders to. */
+  get commandable(): boolean {
+    return this.team === PLAYER_TEAM && this.kind === 'mech';
+  }
 
   get clipName(): string {
     return this.animator?.clipName ?? '';
@@ -53,10 +63,9 @@ export class SeaUnit {
     this.animator?.play(name, fade);
   }
 
-  walkTo(points: [number, number][], loop = false): void {
+  walkTo(points: [number, number][]): void {
     this.route = points;
     this.routeIndex = 0;
-    this.loopRoute = loop;
   }
 
   stop(): void {
@@ -90,20 +99,14 @@ export class SeaUnit {
     const distance = Math.hypot(dx, dz);
     if (distance < ARRIVE_M) {
       this.routeIndex++;
-      if (this.routeIndex >= this.route.length) {
-        if (!this.loopRoute) {
-          this.stop();
-          return;
-        }
-        this.routeIndex = 0;
-      }
+      if (this.routeIndex >= this.route.length) this.stop();
       return;
     }
     const desired = (Math.atan2(dx, dz) * 180) / Math.PI;
     const diff = ((desired - this.rotation + 540) % 360) - 180;
     this.rotation = (this.rotation + Math.sign(diff) * Math.min(Math.abs(diff), TURN_RATE * dt) + 360) % 360;
     this.play(this.running ? 'run' : 'walk');
-    // Turn in place first when the target is well off to the side.
+    // Turn in place first when the next waypoint is well off to the side.
     if (Math.abs(diff) < 30) {
       const step = Math.min(distance, this.speed * dt);
       const r = (this.rotation * Math.PI) / 180;
@@ -115,10 +118,15 @@ export class SeaUnit {
 
 export class World {
   readonly units: SeaUnit[] = [];
-  readonly showcase: SeaUnit[] = [];
-  selected: SeaUnit | null = null;
+  /** The player's units chosen to receive orders. */
+  readonly selected = new Set<SeaUnit>();
+  /** A unit tapped to look at that isn't the player's (shown in the HUD, not ordered). */
+  inspected: SeaUnit | null = null;
   propCount = 0;
-  private ring: ModelInstance | null = null;
+  readonly grid: MoveGrid | null;
+  private rings: ModelInstance[] = [];
+  private ringModel: GpuModel | null = null;
+  private inspectRing: ModelInstance | null = null;
   private readonly glbs = new Map<string, Promise<ModelData>>();
   private readonly ringFrame = new Float32Array(AFFINE_FLOATS);
 
@@ -127,47 +135,61 @@ export class World {
     private readonly terrain: Terrain,
     private readonly info: MapInfo,
     private readonly unitsFile: UnitsFile,
-  ) {}
+    grid: MoveGrid | null,
+  ) {
+    this.grid = grid;
+  }
 
   private get scale(): number {
     return 1 / this.info.worldUnitsPerMeter;
   }
 
   static async load(sea: SeaRenderer, terrain: Terrain, info: MapInfo, mapDir: string, progress: (text: string) => void): Promise<World> {
-    const [objects, unitsFile] = await Promise.all([loadJson<ObjectsFile>(mapDir + 'objects.json'), loadJson<UnitsFile>(mapDir + 'units.json')]);
-    const world = new World(sea, terrain, info, unitsFile);
+    const [objects, unitsFile, cells] = await Promise.all([
+      loadJson<ObjectsFile>(mapDir + 'objects.json'),
+      loadJson<UnitsFile>(mapDir + 'units.json'),
+      info.move ? loadBinary(mapDir + info.move.file) : Promise.resolve(null),
+    ]);
+    // The movement map covers the same square as the terrain: side * 128 MC2 units.
+    const extent = (info.side * info.worldUnitsPerVertex) / info.worldUnitsPerMeter;
+    const grid =
+      cells && info.move ? new MoveGrid(new Uint32Array(cells), info.move.width, info.move.height, extent / info.move.width, [-extent / 2, -extent / 2]) : null;
+    const world = new World(sea, terrain, info, unitsFile, grid);
     progress('Loading buildings and trees…');
     await world.placeProps(objects);
     progress('Loading units…');
     await Promise.all(
       unitsFile.units.map(async (u) => {
-        const unit = await world.spawn(u.model, u.kind, u.name, u.x * world.scale, -u.y * world.scale, u.rotation, u.player ? PLAYER_PAINT : paintFromMission(u.colors));
+        const paint = u.player ? PLAYER_PAINT : paintFromMission(u.colors);
+        // The stats file's name (Werewolf, Bushwacker) reads better than the object file's (werewolf, BushWacker).
+        const unit = await world.spawn(u.model, u.kind, u.csv || u.name, u.team, u.x * world.scale, -u.y * world.scale, u.rotation, paint);
         world.units.push(unit);
       }),
     );
-    // The showcase mechs patrol a loop of dry land beside the opening view, as in the three.js viewer.
-    const loop = landLoop(terrain, info.camera.x * world.scale - 50, -info.camera.y * world.scale - 30, 84);
-    const half = Math.floor(loop.length / 2);
+    // The showcase mechs (Atlas, Madcat) join the player's lance beside its first mech.
+    const lead = world.units.find((u) => u.commandable);
     for (const [i, key] of unitsFile.showcase.entries()) {
-      const [x, z] = loop[(i * half) % loop.length]!;
+      const [x, z] = world.openNear((lead?.x ?? 0) + (i ? 1 : -1) * 2.2 * FORMATION_SPACING, (lead?.z ?? 0) + FORMATION_SPACING);
       const paint = i % 2 ? PLAYER_PAINT : paintFromMission(['#3a5f8f', '#c8c8c8', '#202830']);
-      const unit = await world.spawn(key, 'mech', key, x, z, 0, paint);
-      unit.walkTo(rotate(loop, i * half), true);
-      world.units.push(unit);
-      world.showcase.push(unit);
+      const name = key.charAt(0).toUpperCase() + key.slice(1);
+      world.units.push(await world.spawn(key, 'mech', name, PLAYER_TEAM, x, z, lead?.rotation ?? 0, paint));
     }
-    world.ring = world.sea.models.addInstance(await world.sea.models.addModel(ringModel(), { scale: 1, unlit: true, gain: 1.4 }));
-    world.select(world.showcase[0] ?? world.units[0] ?? null);
+    world.ringModel = await world.sea.models.addModel(selectionRing('selection-ring', [0.35, 1, 0.3, 1]), { scale: 1, unlit: true, gain: 1.4 });
+    world.inspectRing = world.sea.models.addInstance(
+      await world.sea.models.addModel(selectionRing('inspect-ring', [1, 0.3, 0.2, 1]), { scale: 1, unlit: true, gain: 1.4 }),
+    );
+    const first = world.units.find((u) => u.commandable);
+    if (first) world.selected.add(first);
     return world;
   }
 
   /** Put a mech or vehicle on the map (world metres). */
-  async spawn(key: string, kind: 'mech' | 'vehicle', name: string, x: number, z: number, rotation: number, paint: PaintScheme): Promise<SeaUnit> {
+  async spawn(key: string, kind: 'mech' | 'vehicle', name: string, team: number, x: number, z: number, rotation: number, paint: PaintScheme): Promise<SeaUnit> {
     const info = kind === 'mech' ? (this.unitsFile.mechs[key] ?? null) : null;
     const data = await this.glb(info ? info.model : `models/props/${key}.glb`);
     const model = await this.sea.models.addModel(data, { scale: this.scale, paint, gain: GAIN });
     const animator = data.clips.size ? new Animator(data) : null;
-    const unit = new SeaUnit(name, kind, this.sea.models.addInstance(model), animator, restPose(data), info, this.scale, x, z, rotation);
+    const unit = new SeaUnit(name, kind, team, this.sea.models.addInstance(model), animator, restPose(data), info, this.scale, x, z, rotation);
     if (animator) {
       animator.play('idle', 0, Math.random() * 3); // out of step, so a lance does not breathe in unison
     }
@@ -178,27 +200,63 @@ export class World {
   remove(unit: SeaUnit): void {
     this.units.splice(this.units.indexOf(unit), 1);
     this.sea.models.removeInstance(unit.instance);
-    if (this.selected === unit) this.select(this.showcase[0] ?? null);
+    this.selected.delete(unit);
+    if (this.inspected === unit) this.inspected = null;
   }
 
-  select(unit: SeaUnit | null): void {
-    this.selected = unit;
+  /** Tap on a unit: the player's own replace the selection (or toggle in it when `add`); others are only inspected. */
+  tapUnit(unit: SeaUnit, add: boolean): void {
+    if (!unit.commandable) {
+      this.inspected = unit;
+      return;
+    }
+    this.inspected = null;
+    if (add) {
+      if (this.selected.has(unit)) this.selected.delete(unit);
+      else this.selected.add(unit);
+    } else {
+      this.selected.clear();
+      this.selected.add(unit);
+    }
+  }
+
+  selectAll(): void {
+    this.inspected = null;
+    for (const u of this.units) if (u.commandable) this.selected.add(u);
+  }
+
+  stopSelected(): void {
+    for (const u of this.selected) u.stop();
+  }
+
+  setRunning(running: boolean): void {
+    for (const u of this.selected) u.running = running;
+  }
+
+  /**
+   * Send the selected mechs to a point: each gets a slot in a formation about it (the nearest mechs to the point taking
+   * the slots nearest its middle), moved onto open ground, and a route there over the movement map.
+   */
+  orderMove(x: number, z: number): number {
+    const units = [...this.selected].filter((u) => u.kind === 'mech');
+    if (!units.length) return 0;
+    units.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
+    const slots = formationSlots(units.length, FORMATION_SPACING);
+    let routed = 0;
+    units.forEach((u, i) => {
+      const [sx, sz] = this.openNear(x + slots[i]![0], z + slots[i]![1]);
+      const route = this.grid ? this.grid.findPath(u.x, u.z, sx, sz) : [[sx, sz] as [number, number]];
+      if (route) {
+        u.walkTo(route);
+        routed++;
+      }
+    });
+    return routed;
   }
 
   update(dt: number, move = true): void {
     for (const u of this.units) u.update(dt, this.terrain, move);
-    const ring = this.ring;
-    if (!ring) return;
-    const sel = this.selected;
-    ring.visible = sel !== null;
-    if (sel) {
-      placement(this.ringFrame, sel.x, this.terrain.heightAt(sel.x, sel.z) + 0.4, sel.z, 0, sel.radius);
-      ring.matrices.set(this.ringFrame);
-      ring.center[0] = sel.x;
-      ring.center[1] = this.terrain.heightAt(sel.x, sel.z);
-      ring.center[2] = sel.z;
-      ring.radius = sel.radius;
-    }
+    this.updateRings();
   }
 
   /** What a tap at normalised device coordinates hits: a unit, or the ground (world x, z), or nothing. */
@@ -235,6 +293,37 @@ export class World {
       prev = t;
     }
     return null;
+  }
+
+  /** The nearest point a mech can stand on (the point itself if it's open, else the centre of the nearest open cell). */
+  private openNear(x: number, z: number): [number, number] {
+    const grid = this.grid;
+    if (!grid) return [x, z];
+    const [r, c] = grid.cellOf(x, z);
+    if (grid.open(r, c)) return [x, z];
+    const cell = grid.nearestOpen(x, z);
+    return cell ? grid.centre(cell[0], cell[1]) : [x, z];
+  }
+
+  /** A green ring under each selected unit (from a pool that grows as needed) and a red one under an inspected unit. */
+  private updateRings(): void {
+    if (!this.ringModel) return;
+    const marked = [...this.selected];
+    while (this.rings.length < marked.length) this.rings.push(this.sea.models.addInstance(this.ringModel));
+    this.rings.forEach((ring, i) => this.placeRing(ring, marked[i]));
+    if (this.inspectRing) this.placeRing(this.inspectRing, this.inspected ?? undefined);
+  }
+
+  private placeRing(ring: ModelInstance, u: SeaUnit | undefined): void {
+    ring.visible = u !== undefined;
+    if (!u) return;
+    const y = this.terrain.heightAt(u.x, u.z);
+    placement(this.ringFrame, u.x, Math.max(y, 0) + 0.4, u.z, 0, u.radius);
+    ring.matrices.set(this.ringFrame);
+    ring.center[0] = u.x;
+    ring.center[1] = y;
+    ring.center[2] = u.z;
+    ring.radius = u.radius;
   }
 
   private async placeProps(objects: ObjectsFile): Promise<void> {
@@ -275,8 +364,21 @@ export class World {
   }
 }
 
-/** A flat ring of radius 0.85..1 on the ground, for marking the selected unit (scaled to its footprint). */
-function ringModel(): ModelData {
+/** Offsets for `count` units about a point: the middle, then rings of six, twelve, ... `spacing` apart. */
+function formationSlots(count: number, spacing: number): [number, number][] {
+  const slots: [number, number][] = [[0, 0]];
+  for (let ring = 1; slots.length < count; ring++) {
+    const around = ring * 6;
+    for (let k = 0; k < around && slots.length < count; k++) {
+      const a = (k / around) * Math.PI * 2 + ring * 0.4;
+      slots.push([Math.cos(a) * ring * spacing, Math.sin(a) * ring * spacing]);
+    }
+  }
+  return slots;
+}
+
+/** A flat ring of radius 0.85..1 on the ground, for marking units (scaled to each one's footprint). */
+function selectionRing(name: string, color: [number, number, number, number]): ModelData {
   const segments = 48;
   const positions: number[] = [];
   const indices: number[] = [];
@@ -290,9 +392,9 @@ function ringModel(): ModelData {
   }
   const count = positions.length / 3;
   return {
-    name: 'selection-ring',
+    name,
     nodes: [{ name: 'ring', parent: -1, translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] }],
-    materials: [{ name: 'ring', image: null, color: [0.35, 1, 0.3, 1], alphaCutoff: null, doubleSided: true }],
+    materials: [{ name: 'ring', image: null, color, alphaCutoff: null, doubleSided: true }],
     primitives: [
       {
         node: 0,
@@ -305,25 +407,4 @@ function ringModel(): ModelData {
     ],
     clips: new Map(),
   };
-}
-
-/** Points on a circle that are above water, in order, for a patrol loop (world metres). */
-function landLoop(terrain: Terrain, cx: number, cz: number, radius: number): [number, number][] {
-  for (let r = radius; r > 12; r *= 0.75) {
-    const points: [number, number][] = [];
-    for (let a = 0; a < 360; a += 30) {
-      const x = cx + Math.cos((a * Math.PI) / 180) * r;
-      const z = cz + Math.sin((a * Math.PI) / 180) * r;
-      if (terrain.heightAt(x, z) > 0.5) points.push([x, z]);
-    }
-    if (points.length >= 6) return points;
-  }
-  return [
-    [cx, cz],
-    [cx + 20, cz],
-  ];
-}
-
-function rotate<T>(list: T[], by: number): T[] {
-  return list.slice(by).concat(list.slice(0, by));
 }
