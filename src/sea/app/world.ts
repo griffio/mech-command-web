@@ -102,6 +102,8 @@ export class SeaUnit {
   /** A supply truck's load, and how much it holds (null for anything else). */
   supply: number | null = null;
   supplyCapacity: number | null = null;
+  /** A job it's part-way through (a truck building a forward base), shown over it: the share done, and what it is. */
+  job: { share: number; label: string } | null = null;
   /** A soldier's body is gone when he dies (there's no wreck to leave). */
   private gone = false;
   instance: ModelInstance;
@@ -315,6 +317,13 @@ export class SeaUnit {
   }
 }
 
+/** An order the player gave one of their squads, and whether it was carried out (if not, why not). */
+export interface OrderReport {
+  squad: Squad;
+  order: 'move' | 'airlift' | 'attack' | 'stop' | 'build';
+  refused: string | null;
+}
+
 export class World {
   readonly units: SeaUnit[] = [];
   /** The player's units chosen to receive orders. */
@@ -332,6 +341,12 @@ export class World {
   battle!: Battle;
   /** The scenario's match, if one is being played. */
   match: Match | null = null;
+  /** The player's orders to their squads, as they're given (the radio answers them). */
+  onOrders: (reports: OrderReport[]) => void = () => {};
+  /** An order that went to no squad, and why (nothing able to carry it out was selected). */
+  onRefused: (why: string) => void = () => {};
+  /** The player picked squads. */
+  onSelect: () => void = () => {};
   private rings: ModelInstance[] = [];
   private ringModel: GpuModel | null = null;
   private inspectRing: ModelInstance | null = null;
@@ -540,13 +555,13 @@ export class World {
    * A ring `radius` metres across marking the ground about a point (a capture point, a base), lying on the terrain
    * however it slopes. Stand it with addMarker(model, x, z, 1).
    */
-  markerRing(color: [number, number, number, number], x: number, z: number, radius: number): Promise<GpuModel> {
+  markerRing(color: [number, number, number, number], x: number, z: number, radius: number, width = 3): Promise<GpuModel> {
     const base = Math.max(this.terrain.heightAt(x, z), 0);
     // A little above the ground, so the coarser meshes of distant land don't swallow it.
     const lift = (a: number, r: number) => Math.max(this.terrain.heightAt(x + Math.cos(a) * r, z + Math.sin(a) * r), 0) - base + 1.5;
     // Its own name: the renderer shares models by name, and every ring is shaped to its own ground.
-    const name = `marker-ring ${x} ${z} ${radius} ${color.join(',')}`;
-    return this.sea.models.addModel(selectionRing(name, color, 1 - 3 / radius, radius, lift), { scale: 1, unlit: true, gain: 1.4, castsShadow: false });
+    const name = `marker-ring ${x} ${z} ${radius} ${width} ${color.join(',')}`;
+    return this.sea.models.addModel(selectionRing(name, color, 1 - width / radius, radius, lift), { scale: 1, unlit: true, gain: 1.4, castsShadow: false });
   }
 
   /** A scenario prop's GLB, by object file name or appearance (flags, sandbags, the Karnov), or null. */
@@ -623,6 +638,7 @@ export class World {
     if (add && this.selectedSquads.has(squad)) this.selectedSquads.delete(squad);
     else this.selectedSquads.add(squad);
     this.syncSelection();
+    this.onSelect();
   }
 
   /** With a scenario the selection is the selected squads' living members. */
@@ -697,7 +713,8 @@ export class World {
     this.inspected = null;
     if (this.match) {
       for (const q of this.playerSquads) if (q.alive.length) this.selectedSquads.add(q);
-      return this.syncSelection();
+      this.syncSelection();
+      return this.onSelect();
     }
     for (const u of this.units) if (u.commandable) this.selected.add(u);
   }
@@ -705,7 +722,9 @@ export class World {
   /** Stop walking and drop any attack order (the mechs still fire at what comes into range). */
   stopSelected(): void {
     if (this.match) {
-      for (const q of this.selectedSquads) q.hold();
+      const squads = [...this.selectedSquads].filter((q) => q.alive.length);
+      for (const q of squads) if (!q.airborne) q.hold();
+      if (squads.length) this.onOrders(squads.map((q) => ({ squad: q, order: 'stop', refused: q.airborne ? `${q.name} is with the Karnov` : null })));
       return;
     }
     for (const u of this.selected) {
@@ -721,8 +740,15 @@ export class World {
   /** Send the selection after an enemy: each closes to its best range and fires until one of them is destroyed. */
   orderAttack(target: SeaUnit): number {
     if (this.match) {
-      for (const q of this.selectedSquads) q.attack(target);
-      return this.selectedSquads.size;
+      const reports: OrderReport[] = [];
+      for (const q of this.selectedSquads) {
+        if (!q.alive.length) continue;
+        const why = q.airborne ? `${q.name} is with the Karnov` : q.alive.some((u) => u.combat?.weapons.length) ? null : `${q.name} has no weapons`;
+        if (!why) q.attack(target);
+        reports.push({ squad: q, order: 'attack', refused: why });
+      }
+      if (reports.length) this.onOrders(reports);
+      return reports.filter((r) => !r.refused).length;
     }
     let ordered = 0;
     for (const u of this.selected) {
@@ -762,13 +788,23 @@ export class World {
     return routed;
   }
 
-  /** Send the selected logistics squads to build a forward base at a point; the reason, if one can't. */
-  orderBuildFob(x: number, z: number): string | null {
+  /** Send the selected logistics squads to build a forward base at a point. */
+  orderBuildFob(x: number, z: number): void {
     const logistics = this.match?.logistics;
-    if (!logistics) return 'no logistics in this scenario';
-    let why: string | null = 'select a logistics squad first';
-    for (const q of this.selectedSquads) if (q.isLogistics) why = logistics.orderBuild(q, x, z);
-    return why;
+    if (!logistics) return this.onRefused('there are no supply trucks in this scenario');
+    const squads = [...this.selectedSquads].filter((q) => q.isLogistics);
+    if (!squads.length) return this.onRefused('select a supply truck first');
+    this.onOrders(squads.map((q) => ({ squad: q, order: 'build', refused: logistics.orderBuild(q, x, z) })));
+  }
+
+  /** Why none of the selected squads could build a forward base just now, or null if one can. */
+  whyNoFob(): string | null {
+    const logistics = this.match?.logistics;
+    if (!logistics) return 'there are no supply trucks in this scenario';
+    const squads = [...this.selectedSquads].filter((q) => q.isLogistics);
+    if (!squads.length) return 'select a supply truck first';
+    const why = squads.map((q) => logistics.whyNotNow(q));
+    return why.every((w) => w) ? why[0]! : null;
   }
 
   /** Airlift the selected infantry squads to a point (the rest of the selection goes there on its own feet). */
@@ -793,15 +829,18 @@ export class World {
     const d = Math.hypot(x - cx, z - cz) || 1;
     const [px, pz] = [-(z - cz) / d, (x - cx) / d];
     squads.sort((a, b) => dist(a.centroid()!, x, z) - dist(b.centroid()!, x, z));
-    squads.forEach((q, i) => {
+    const reports = squads.map((q, i): OrderReport => {
+      // A squad waiting for its Karnov, or aboard it, goes where the Karnov takes it.
+      if (q.airborne) return { squad: q, order: airlift ? 'airlift' : 'move', refused: `${q.name} is with the Karnov` };
       const o = (i % 2 ? 1 : -1) * Math.ceil(i / 2) * SQUAD_SPACING;
       const [tx, tz] = [x + px * o, z + pz * o];
       const c = q.centroid()!;
       const walkable = this.grids?.ground.connected(c[0], c[1], tx, tz) ?? true;
-      if (q.airliftable && (airlift || !walkable) && this.match?.airliftSquad(q, tx, tz)) return;
-      q.move(this, tx, tz);
+      if (q.airliftable && (airlift || !walkable) && this.match?.airliftSquad(q, tx, tz)) return { squad: q, order: 'airlift', refused: null };
+      return { squad: q, order: 'move', refused: q.move(this, tx, tz) ? null : `${q.name} can't get there` };
     });
-    return squads.length;
+    this.onOrders(reports);
+    return reports.filter((r) => !r.refused).length;
   }
 
   update(dt: number, move = true): void {
@@ -966,7 +1005,8 @@ function selectionRing(
   size = 1,
   lift: (a: number, r: number) => number = () => 0,
 ): ModelData {
-  const segments = size > 4 ? 128 : 48;
+  // A unit's ring is small; a place's has a vertex every 5 m or so of its edge, to follow the ground.
+  const segments = size > 4 ? Math.min(512, Math.max(128, Math.round((size * 2 * Math.PI) / 5))) : 48;
   const positions: number[] = [];
   const indices: number[] = [];
   for (let i = 0; i <= segments; i++) {

@@ -14,6 +14,7 @@ import { parseAse } from './lib/ase.ts';
 import { collectMissionModels, readMission } from './lib/mission.ts';
 import { RemoteZip } from './lib/remote-zip.ts';
 import { readScenarios, scenarioNeeds } from './lib/scenario.ts';
+import { soundLists, soundSet } from './lib/sound.ts';
 import { SourceData } from './lib/srcdata.ts';
 
 const REPO = 'https://github.com/alariq/mc2srcdata.git';
@@ -95,10 +96,14 @@ for (const spec of models.specs.values()) {
 }
 checkout('textures', [...textures]);
 
+// 4. Sounds: the radio table and the lists the files are named in, then the squads' voices, Betty and the effects.
+checkout('sound lists', soundLists(needs.voices).map((p) => tree.actual(p)).filter((p): p is string => p !== null));
+checkout('sounds', [...soundSet(tree, needs.voices).files.values()]);
+
 for (const [reason, n] of models.unresolved) console.warn(`  skipped ${n}x ${reason}`);
 console.log(`done: ${models.specs.size} models for ${mission}`);
 
-// 4. Optional 4x upscales: the terrain colour map and the model textures.
+// 5. Optional 4x upscales: the terrain colour map and the model textures.
 if (values.upscaled) {
   const upDest = values['upscaled-dest']!;
   const [tglZip, ...burninZips] = await Promise.all(

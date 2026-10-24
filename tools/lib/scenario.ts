@@ -20,6 +20,8 @@ export interface ScenarioSquad {
   units: string[];
   /** The pilots' gunnery: the chance to hit, percent. */
   gunnery: number;
+  /** Whose voice it talks in over the radio: an MC2 pilot's sounds (sound/pilots/pilot1..pilot26). */
+  voice?: string;
 }
 
 export interface ScenarioSide {
@@ -75,10 +77,11 @@ export function readScenarios(map: string, dir = 'scenarios'): Scenario[] {
 }
 
 /** Every unit type, prop object and bare appearance the scenarios use. */
-export function scenarioNeeds(scenarios: Scenario[]): { units: string[]; props: string[]; appearances: string[] } {
+export function scenarioNeeds(scenarios: Scenario[]): { units: string[]; props: string[]; appearances: string[]; voices: string[] } {
   const units = new Set<string>();
   const props = new Set<string>();
   const appearances = new Set<string>();
+  const voices = new Set<string>();
   for (const s of scenarios) {
     if (s.transport) appearances.add(s.transport.toLowerCase());
     if (s.garrison) props.add(s.garrison.toLowerCase());
@@ -90,8 +93,11 @@ export function scenarioNeeds(scenarios: Scenario[]): { units: string[]; props: 
     }
     for (const side of s.sides) {
       props.add(side.flag.toLowerCase());
-      for (const squad of side.squads) for (const u of squad.units) units.add(u.toLowerCase());
+      for (const squad of side.squads) {
+        for (const u of squad.units) units.add(u.toLowerCase());
+        if (squad.voice) voices.add(squad.voice.toLowerCase());
+      }
     }
   }
-  return { units: [...units], props: [...props], appearances: [...appearances] };
+  return { units: [...units], props: [...props], appearances: [...appearances], voices: [...voices] };
 }

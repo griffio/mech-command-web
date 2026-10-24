@@ -4,13 +4,14 @@
 // supply), and the Karnov flies from it. Destroy the tent and the base is gone. The main base works the same way, free.
 //
 // Trucks need no orders but where to go: one standing at the main base fills up, one standing at a forward base unloads
-// into it, and one told to build drives to the spot and builds when it gets there.
+// into it, and one told to build drives to the spot and builds when it gets there (another order calls the build off).
+// The player sees where their truck is going to build, how long it has left, and, while choosing a spot, where it can't.
 import type { ScenarioLogistics, VehicleStats } from '../../assets';
 import type { PaintScheme } from '../../paint.ts';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import type { Squad } from './squads';
 import type { Match } from './match';
-import { bearing, type SeaUnit, type World } from './world';
+import { bearing, PLAYER_TEAM, type SeaUnit, type World } from './world';
 
 /** Squads within this of a forward base reinforce and refit there, metres. */
 export const FOB_RADIUS = 60;
@@ -30,6 +31,8 @@ const HQ_STRUCTURE = 60;
 const FOB_LOST_TICKETS = 10;
 /** Supply refitting costs a forward base, a second per unit being refitted. */
 const REFIT_SUPPLY_PER_S = 1;
+const SITE_COLOR: [number, number, number, number] = [0.62, 0.82, 1, 1];
+const NO_BUILD_COLOR: [number, number, number, number] = [0.95, 0.26, 0.2, 1];
 
 export interface Fob {
   team: number;
@@ -39,6 +42,8 @@ export interface Fob {
   hq: SeaUnit;
   turret: SeaUnit | null;
   decor: ModelInstance[];
+  /** It has run out of supply for something it was asked for (said once, until a truck brings more). */
+  dry: boolean;
 }
 
 /** Somewhere a squad can reinforce and refit: its side's main base (free), or a forward base (paid for in supply). */
@@ -53,6 +58,8 @@ interface Build {
   x: number;
   z: number;
   progress: number;
+  /** The ring marking where the player's truck is going to build. */
+  site: Promise<ModelInstance> | null;
 }
 
 export class Logistics {
@@ -61,6 +68,10 @@ export class Logistics {
   private wallModel: GpuModel | null = null;
   private hqPath: string | null = null;
   private readonly rings = new Map<Fob, ModelInstance>();
+  /** Rings shown while the player picks a spot: where a forward base can't go. */
+  private noBuild: ModelInstance[] = [];
+  private noBuildShown = false;
+  private readonly noBuildModels = new Map<string, Promise<GpuModel>>();
 
   constructor(
     private readonly world: World,
@@ -97,17 +108,78 @@ export class Logistics {
     return null;
   }
 
+  /** Why a logistics squad can't build a forward base anywhere just now, or null if it can. */
+  whyNotNow(squad: Squad): string | null {
+    const truck = squad.alive[0];
+    if (!truck || truck.supply === null) return `${squad.name} has no truck`;
+    if (squad.airborne) return `${squad.name} is with the Karnov`;
+    if (truck.supply < this.spec.fobCost) return `${squad.name} carries ${Math.floor(truck.supply)} supply, and a forward base takes ${this.spec.fobCost}: fill up at base`;
+    if (this.fobs.filter((f) => f.team === squad.team).length >= MAX_FOBS) return `${MAX_FOBS} forward bases is the most a side can keep`;
+    return null;
+  }
+
   /** Send a logistics squad to build a forward base at a point. Null when it's on its way; otherwise why it can't. */
   orderBuild(squad: Squad, x: number, z: number): string | null {
-    const truck = squad.alive[0];
-    if (!truck || truck.supply === null) return 'no truck';
-    if (truck.supply < this.spec.fobCost) return `the truck carries ${Math.floor(truck.supply)} supply, and a forward base takes ${this.spec.fobCost}`;
+    const now = this.whyNotNow(squad);
+    if (now) return now;
     const [sx, sz] = this.world.openNear(x, z, 'ground');
     const why = this.whyNot(squad.team, sx, sz);
-    if (why) return why;
-    this.builds.set(squad, { x: sx, z: sz, progress: 0 });
+    if (why) return `can't build there: ${why}`;
+    const truck = squad.alive[0]!;
+    if (this.world.grids && !this.world.grids.ground.connected(truck.x, truck.z, sx, sz)) return `${squad.name} can't drive there: airlift it over first`;
+    this.cancel(squad, null);
+    const site = squad.team === PLAYER_TEAM ? this.world.markerRing(SITE_COLOR, sx, sz, FOB_RADIUS).then((m) => this.world.addMarker(m, sx, sz, 1)) : null;
+    this.builds.set(squad, { x: sx, z: sz, progress: 0, site });
     squad.move(this.world, sx, sz);
     return null;
+  }
+
+  /** Call off a squad's build (saying why, for the player's), and take down its site ring. */
+  private cancel(squad: Squad, why: string | null): void {
+    const build = this.builds.get(squad);
+    if (!build) return;
+    this.builds.delete(squad);
+    void build.site?.then((ring) => this.world.removeMarker(ring));
+    const truck = squad.alive[0];
+    if (truck) truck.job = null;
+    if (why && squad.team === PLAYER_TEAM) this.match.onEvent(`${squad.name}: forward base ${why}`, squad.team);
+  }
+
+  /**
+   * While the player picks where to build (team), ring the places a forward base can't go: about each of their bases
+   * and about the enemy's. Null takes the rings down.
+   */
+  async showNoBuild(team: number | null): Promise<void> {
+    this.noBuildShown = team !== null;
+    for (const r of this.noBuild) this.world.removeMarker(r);
+    this.noBuild = [];
+    if (team === null) return;
+    const zones: [number, number, number][] = [];
+    for (const s of this.match.sides) zones.push([s.base.x, s.base.z, s.team === team ? FOB_SPACING : ENEMY_BASE_SPACING]);
+    for (const f of this.fobs) if (f.team === team) zones.push([f.x, f.z, FOB_SPACING]);
+    const models = await Promise.all(zones.map(([x, z, r]) => this.noBuildModel(x, z, r)));
+    // Taken down (or asked for again) meanwhile.
+    if (!this.noBuildShown || this.noBuild.length) return;
+    this.noBuild = models.map((m, i) => this.world.addMarker(m, zones[i]![0], zones[i]![1], 1));
+  }
+
+  private noBuildModel(x: number, z: number, r: number): Promise<GpuModel> {
+    const key = `${x} ${z} ${r}`;
+    let model = this.noBuildModels.get(key);
+    if (!model) {
+      model = this.world.markerRing(NO_BUILD_COLOR, x, z, r, 5);
+      this.noBuildModels.set(key, model);
+    }
+    return model;
+  }
+
+  /** A forward base couldn't pay for a squad's refit or reinforcement: say so, once until it's supplied again. */
+  short(fob: Fob, squad: Squad, what: 'refit' | 'reinforce'): void {
+    if (fob.dry) return;
+    fob.dry = true;
+    if (fob.team !== PLAYER_TEAM) return;
+    this.match.onEvent(`Forward base out of supply: ${squad.name} can't ${what} there until a truck brings more`, fob.team);
+    this.match.onSignal({ kind: 'outOfSupply', team: fob.team, squad: null });
   }
 
   /** The squad has a build to do (it may still be driving there). */
@@ -167,23 +239,31 @@ export class Logistics {
       for (const squad of side.squads) {
         const truck = squad.alive[0];
         if (!squad.isLogistics || !truck || truck.supply === null) {
-          this.builds.delete(squad);
+          this.cancel(squad, squad.alive.length ? null : 'called off: the truck was destroyed');
           continue;
         }
         squad.task = null;
         const still = !truck.route.length && !truck.embarked;
         const build = this.builds.get(squad);
         if (build) {
+          // Another order (a move elsewhere, Stop, an airlift) calls it off.
+          const o = squad.order;
+          if (o.kind !== 'move' || Math.hypot(o.x - build.x, o.z - build.z) > 1) {
+            this.cancel(squad, 'called off');
+            continue;
+          }
           if (Math.hypot(truck.x - build.x, truck.z - build.z) > ARRIVED_M) {
-            if (still) this.builds.delete(squad); // it was stopped, or sent elsewhere
+            if (still) this.cancel(squad, "called off: the truck couldn't get to the spot");
             continue;
           }
           if (!still) continue;
           if (build.progress === 0) truck.play('deploy', 0.3, true);
           build.progress += dt;
-          squad.task = `building, ${Math.ceil(BUILD_S - build.progress)} s`;
+          const left = Math.ceil(BUILD_S - build.progress);
+          squad.task = `building, ${left} s`;
+          truck.job = { share: Math.min(build.progress / BUILD_S, 1), label: `Building · ${left} s` };
           if (build.progress < BUILD_S) continue;
-          this.builds.delete(squad);
+          this.cancel(squad, null);
           truck.play('idle', 0.3);
           const why = this.whyNot(side.team, build.x, build.z) ?? (truck.supply < this.spec.fobCost ? 'not enough supply' : null);
           if (why) this.match.onEvent(`${squad.name} couldn't build: ${why}`, side.team);
@@ -206,7 +286,12 @@ export class Logistics {
           const amount = Math.min(truck.supply, FOB_CAPACITY - at.fob.supply, TRANSFER_PER_S * dt);
           truck.supply -= amount;
           at.fob.supply += amount;
+          at.fob.dry = false;
           squad.task = 'unloading';
+          if (truck.supply <= 0 && side.team === PLAYER_TEAM) {
+            this.match.onEvent(`${squad.name} has unloaded everything: send it to base to fill up`, side.team);
+            this.match.onSignal({ kind: 'outOfSupply', team: side.team, squad });
+          }
         }
       }
     }
@@ -222,6 +307,7 @@ export class Logistics {
       const side = this.match.side(fob.team);
       side.tickets -= FOB_LOST_TICKETS;
       this.match.onEvent(`${side.name} lost a forward base (−${FOB_LOST_TICKETS} tickets)`, fob.team);
+      this.match.onSignal({ kind: 'fobLost', team: fob.team });
     }
   }
 
@@ -257,11 +343,12 @@ export class Logistics {
         decor.push(this.world.addMarker(this.wallModel, x + Math.sin(a) * 12, z + Math.cos(a) * 12, undefined, facing));
       }
     }
-    const fob: Fob = { team, x, z, supply: 0, hq, turret, decor };
+    const fob: Fob = { team, x, z, supply: 0, hq, turret, decor, dry: false };
     this.fobs.push(fob);
     const color: [number, number, number, number] = team === 0 ? [0.3, 0.62, 1, 1] : [1, 0.33, 0.27, 1];
     this.rings.set(fob, this.world.addMarker(await this.world.markerRing(color, x, z, FOB_RADIUS), x, z, 1));
     this.match.onEvent(`${this.match.side(team).name} built a forward base`, team);
+    this.match.onSignal({ kind: 'fobBuilt', team });
   }
 }
 

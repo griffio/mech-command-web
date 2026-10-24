@@ -50,7 +50,8 @@
             "madcat",
             "catapult"
           ],
-          "gunnery": 55
+          "gunnery": 55,
+          "voice": "pilot5"
         },
         {
           "name": "Bravo",
@@ -60,7 +61,8 @@
             "bushwacker",
             "raven"
           ],
-          "gunnery": 50
+          "gunnery": 50,
+          "voice": "pilot7"
         },
         {
           "name": "Charlie",
@@ -73,7 +75,8 @@
             "infantry",
             "infantry"
           ],
-          "gunnery": 45
+          "gunnery": 45,
+          "voice": "pilot3"
         },
         {
           "name": "Delta",
@@ -84,7 +87,8 @@
             "poweredarmor",
             "poweredarmor"
           ],
-          "gunnery": 50
+          "gunnery": 50,
+          "voice": "pilot11"
         },
         {
           "name": "Echo",
@@ -92,7 +96,8 @@
           "units": [
             "repairtruck"
           ],
-          "gunnery": 30
+          "gunnery": 30,
+          "voice": "pilot1"
         }
       ]
     },

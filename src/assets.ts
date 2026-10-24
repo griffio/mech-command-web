@@ -99,6 +99,7 @@ export type {
   WeaponDef,
 } from '../tools/lib/combat-data.ts';
 export type { Scenario, ScenarioLogistics, ScenarioPoint, ScenarioSide, ScenarioSquad } from '../tools/lib/scenario.ts';
+export type { BettyLine, Effect, RadioMessage, SoundFile } from '../tools/lib/sound.ts';
 
 /** combat.json: the weapons and ammunition the map's units carry, and each unit type's armour and loadout. */
 export interface CombatFile {

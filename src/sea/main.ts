@@ -18,8 +18,12 @@ import { DEFAULT_SEA, SeaRenderer, type SeaQuality } from './render/sea-renderer
 import { SurfLines } from './sim/terrain/surf';
 import { Terrain } from './sim/terrain/terrain';
 import { mc2TerrainGrid, upsampleGrid } from './app/mc2-map';
+import { Callouts } from './app/callouts';
 import { CommanderAI } from './app/match';
 import { MatchHud } from './app/match-hud';
+import { Notice } from './app/notice';
+import { Sound } from './app/sound';
+import type { Squad } from './app/squads';
 import { UnitBars } from './app/unit-bars';
 import { PLAYER_TEAM, World, type SeaUnit } from './app/world';
 
@@ -122,7 +126,15 @@ async function main() {
   );
   controls.groundAt = (x, z) => terrain.heightAt(x, z);
 
-  mountOrders(canvas, camera, world);
+  // The squads' radio, Betty and the interface's sounds, and the notice line: with a match.
+  const notice = new Notice(document.getElementById('notice')!);
+  const sound = world.match ? await Sound.load() : null;
+  const callouts = world.match ? new Callouts(world, world.match, sound, notice) : null;
+  if (sound) {
+    void sound.preload();
+    mountSoundToggle(sound);
+  }
+  mountOrders(canvas, camera, world, notice, sound, callouts);
   const bars = new UnitBars(document.getElementById('bars')!);
   const hud = world.match
     ? new MatchHud(world, world.match, document.getElementById('match')!, document.getElementById('squads')!, document.getElementById('bars')!, (x, z) => {
@@ -222,6 +234,8 @@ async function main() {
     camera.update(canvas.clientWidth / Math.max(canvas.clientHeight, 1));
     const simStart = performance.now();
     for (let i = 0; i < speed; i++) world.update(dt, !survey.running || survey.worldLive);
+    callouts?.update();
+    if (sound) sound.enabled = !survey.running;
     if (!survey.quietHud) {
       bars.update(world, camera, canvas.clientWidth, canvas.clientHeight);
       hud?.update(camera, canvas.clientWidth, canvas.clientHeight);
@@ -262,7 +276,7 @@ async function main() {
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
-  Object.assign(window, { sea: { sea, camera, controls, terrain, sizer, survey, world, CommanderAI } });
+  Object.assign(window, { sea: { sea, camera, controls, terrain, sizer, survey, world, sound, callouts, CommanderAI } });
 }
 
 /**
@@ -270,7 +284,7 @@ async function main() {
  * to the selection or takes it out. A tap on another unit shows what it is. A tap on the ground sends the selection
  * there. Drags and two-finger gestures belong to the camera and are never taps.
  */
-function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World) {
+function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, notice: Notice, sound: Sound | null, callouts: Callouts | null) {
   const LONG_PRESS_MS = 450;
   const SLOP_PX = 8;
   const pointers = new Set<number>();
@@ -315,14 +329,10 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World) {
     if (Array.isArray(hit)) {
       // With Airlift pressed, the tap is where the Karnov drops the selected infantry; with Build FOB, where the
       // selected truck builds a forward base.
-      if (airlift.getAttribute('aria-pressed') === 'true') {
-        world.orderAirlift(hit[0], hit[1]);
-        airlift.setAttribute('aria-pressed', 'false');
-      } else if (build.getAttribute('aria-pressed') === 'true') {
-        const why = world.orderBuildFob(hit[0], hit[1]);
-        if (why) logEvent(`Can't build a forward base there: ${why}`, PLAYER_TEAM);
-        build.setAttribute('aria-pressed', 'false');
-      } else world.orderMove(hit[0], hit[1]);
+      if (mode === 'airlift') world.orderAirlift(hit[0], hit[1]);
+      else if (mode === 'build') world.orderBuildFob(hit[0], hit[1]);
+      else world.orderMove(hit[0], hit[1]);
+      setMode(null);
     } else world.tapUnit(hit, e.shiftKey);
   };
   canvas.addEventListener('pointerup', end);
@@ -331,22 +341,46 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World) {
   const run = document.getElementById('cmd-run') as HTMLButtonElement;
   const airlift = document.getElementById('cmd-airlift') as HTMLButtonElement;
   const build = document.getElementById('cmd-build') as HTMLButtonElement;
-  // Each is a mode for the next tap on the ground; pressing one lets go of the other.
-  for (const [button, other] of [[airlift, build], [build, airlift]] as const) {
-    button.addEventListener('click', () => {
-      button.setAttribute('aria-pressed', String(button.getAttribute('aria-pressed') !== 'true'));
-      other.setAttribute('aria-pressed', 'false');
-    });
+  // Airlift and Build FOB are modes for the next tap on the ground (pressing one lets go of the other): while one waits,
+  // the notice says what to tap, and for a forward base red rings show where it can't go.
+  let mode: 'airlift' | 'build' | null = null;
+  const names = (pick: (q: Squad) => boolean) => [...world.selectedSquads].filter(pick).map((q) => q.name).join(' and ');
+  function setMode(next: typeof mode): void {
+    if (next === mode) return;
+    mode = next;
+    airlift.setAttribute('aria-pressed', String(mode === 'airlift'));
+    build.setAttribute('aria-pressed', String(mode === 'build'));
+    void world.match?.logistics?.showNoBuild(mode === 'build' ? PLAYER_TEAM : null);
+    notice.hint(
+      mode === 'airlift'
+        ? `Tap where the Karnov should set ${names((q) => q.airliftable && !q.airborne)} down`
+        : mode === 'build'
+          ? `Tap where ${names((q) => q.isLogistics)} should build a forward base, outside the red rings`
+          : null,
+    );
   }
+  airlift.addEventListener('click', () => {
+    sound?.effect(mode === 'airlift' ? 'off' : 'on');
+    setMode(mode === 'airlift' ? null : 'airlift');
+  });
+  build.addEventListener('click', () => {
+    if (mode !== 'build') {
+      // Refused straight away when the truck can't build anywhere (too little supply, too many bases).
+      const why = world.whyNoFob();
+      if (why) return callouts?.refused(why, [...world.selectedSquads].find((q) => q.isLogistics) ?? null);
+    }
+    sound?.effect(mode === 'build' ? 'off' : 'on');
+    setMode(mode === 'build' ? null : 'build');
+  });
   // Airlift is offered while the selection has something the Karnov can carry; Build FOB while it has a supply truck.
-  const offer = (button: HTMLButtonElement, on: boolean) => {
+  const offer = (button: HTMLButtonElement, on: boolean, which: typeof mode) => {
     if (button.hidden === on) button.hidden = !on;
-    if (!on) button.setAttribute('aria-pressed', 'false');
+    if (!on && mode === which) setMode(null);
   };
   window.setInterval(() => {
     const squads = [...world.selectedSquads];
-    offer(airlift, !!world.match?.airlift.available && squads.some((q) => q.airliftable && !q.airborne));
-    offer(build, !!world.match?.logistics && squads.some((q) => q.isLogistics && !q.airborne));
+    offer(airlift, !!world.match?.airlift.available && squads.some((q) => q.airliftable && !q.airborne), 'airlift');
+    offer(build, !!world.match?.logistics && squads.some((q) => q.isLogistics && !q.airborne), 'build');
   }, 250);
   document.getElementById('cmd-all')!.addEventListener('click', () => world.selectAll());
   document.getElementById('cmd-stop')!.addEventListener('click', () => world.stopSelected());
@@ -354,6 +388,21 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World) {
     const on = run.getAttribute('aria-pressed') !== 'true';
     run.setAttribute('aria-pressed', String(on));
     world.setRunning(on);
+  });
+}
+
+/** The sound on/off button (remembered between visits). */
+function mountSoundToggle(sound: Sound): void {
+  const button = document.getElementById('sound-toggle') as HTMLButtonElement;
+  const show = () => {
+    button.setAttribute('aria-pressed', String(!sound.isMuted));
+    button.textContent = sound.isMuted ? 'Sound off' : 'Sound on';
+  };
+  button.hidden = false;
+  show();
+  button.addEventListener('click', () => {
+    sound.setMuted(!sound.isMuted);
+    show();
   });
 }
 
@@ -374,7 +423,8 @@ function describeSelection(world: World): string {
     if (squads.length > 1) return `Squads ${squads.map((q) => q.name).join(', ')} · ${hint}`;
     const q = squads[0]!;
     const alive = q.alive;
-    const members = alive.length === 1 ? describeUnit(world, alive[0]!) : alive.map((m) => `${m.name} ${percent(m)}`).join(', ');
+    // A truck's supply is in the squad's status.
+    const members = alive.length === 1 ? describeUnit(world, alive[0]!, !q.isLogistics) : alive.map((m) => `${m.name} ${percent(m)}`).join(', ');
     return `${q.name} (${q.spec.role}): ${members || 'none left'} · ${q.status(world.match.time)} · ${hint}`;
   }
   const units = [...world.selected];
@@ -385,12 +435,12 @@ function describeSelection(world: World): string {
 }
 
 /** Name, armour left, working weapons, ammunition, and what it's shooting at. */
-function describeUnit(world: World, u: SeaUnit): string {
+function describeUnit(world: World, u: SeaUnit, supply = true): string {
   const c = u.combat;
   if (!c) return u.name;
   const parts = [`${u.name} ${percent(u)}`];
   if (c.weapons.length) parts.push(`${c.weapons.filter((w) => !w.destroyed).length}/${c.weapons.length} weapons`);
-  if (u.supply !== null) parts.push(`supply ${Math.floor(u.supply)}`);
+  if (u.supply !== null && supply) parts.push(`supply ${Math.floor(u.supply)}`);
   const ammo = [...c.ammo].map(([id, rounds]) => `${world.ammoName(id)} ${Math.floor(rounds)}`).join(', ');
   if (ammo) parts.push(ammo);
   if (u.target) parts.push(`${u.attackOrder ? 'attacking' : 'firing at'} ${u.target.name}, ${Math.round(Math.hypot(u.target.x - u.x, u.target.z - u.z))} m`);

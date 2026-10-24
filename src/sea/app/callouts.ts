@@ -1,0 +1,208 @@
+// What the player hears and reads as a match goes. Their squads answer orders over the radio in their pilots' voices
+// (MC2's lines: acknowledged, can't do that, can't get there) and call out contacts, attacks, crippling damage, kills
+// and finished refits. Betty announces points taken, forward bases under attack or lost, supply run out, and the
+// result. Refused orders and alerts also show in the middle of the screen, with MC2's buzz or alarm.
+//
+// MC2 says these lines when it does (code/tacordr.cpp, warrior.cpp, mech.cpp, mover.cpp); how often a squad repeats
+// itself is this project's own choice, so that a long fight isn't a running commentary.
+import type { RadioMessage } from '../../assets';
+import type { Fob } from './logistics';
+import type { Match, MatchSignal } from './match';
+import type { Notice } from './notice';
+import type { Sound } from './sound';
+import type { Squad } from './squads';
+import { PLAYER_TEAM, type OrderReport, type SeaUnit, type World } from './world';
+
+/** A squad says it's under attack when an attack starts: after this long without being hit, seconds. */
+const UNDER_ATTACK_QUIET_S = 25;
+/** An enemy squad that has been out of sight this long is a new contact when it's seen again, seconds. */
+const CONTACT_FORGET_S = 40;
+/** Seconds between one squad's reports of kills. */
+const KILL_QUIET_S = 8;
+/** Betty warns of a forward base under attack again after this long without it being hit, seconds. */
+const BASE_ATTACK_QUIET_S = 30;
+/** The alarm for a point being taken sounds again after this long without anyone taking it, seconds. */
+const POINT_ALERT_QUIET_S = 30;
+/** Armour and structure left below which a mech or vehicle reports itself crippled (it can again once refitted). */
+const CRIPPLED = 0.35;
+/** A squad that has lost this much reports when a refit has made it whole again. */
+const REFIT_REPORT_BELOW = 0.95;
+const WHOLE = 0.99;
+const POLL_S = 0.25;
+
+export class Callouts {
+  private readonly lastHit = new Map<Squad, number>();
+  private readonly lastSeen = new Map<Squad, number>();
+  private readonly lastKill = new Map<Squad, number>();
+  private readonly lastBaseAlert = new Map<Fob, number>();
+  private readonly lastPointAlert = new Map<number, number>();
+  private readonly crippled = new Set<SeaUnit>();
+  private readonly damaged = new Set<Squad>();
+  private nextPoll = 0;
+
+  constructor(
+    private readonly world: World,
+    private readonly match: Match,
+    private readonly sound: Sound | null,
+    private readonly notice: Notice,
+  ) {
+    world.onOrders = (reports) => this.ordered(reports);
+    world.onRefused = (why) => this.refused(why, null);
+    world.onSelect = () => sound?.effect('select');
+    world.battle.onHit = (u) => this.hit(u);
+    match.onSignal = (s) => this.signal(s);
+  }
+
+  /** An order that can't be carried out: the notice, the buzz, and the squad saying so. */
+  refused(why: string, squad: Squad | null, message: RadioMessage = 'illegalOrder'): void {
+    this.notice.show(why, 'refused');
+    this.sound?.effect('invalid');
+    if (squad) this.say(squad, message);
+  }
+
+  /** Look over the player's side for what's worth a word: new contacts, crippled units, finished refits, points at risk. */
+  update(): void {
+    const t = this.match.time;
+    if (t < this.nextPoll) return;
+    this.nextPoll = t + POLL_S;
+    this.contacts(t);
+    this.condition();
+    this.pointsAtRisk(t);
+  }
+
+  private ordered(reports: OrderReport[]): void {
+    const refused = reports.filter((r) => r.refused);
+    const done = reports.find((r) => !r.refused);
+    if (refused.length) {
+      // When none of the squads could, one of them says why.
+      const r = refused[0]!;
+      this.refused(refused.map((q) => q.refused).join(' · '), done ? null : r.squad, r.order === 'move' ? 'moveBlocked' : 'illegalOrder');
+    }
+    if (!done) return;
+    if (done.order === 'move' || done.order === 'airlift' || done.order === 'build') this.sound?.effect('place');
+    // MC2 answers an attack order either way, at even odds (tacordr.cpp).
+    this.say(done.squad, done.order === 'attack' && Math.random() < 0.5 ? 'targetAck' : 'ack');
+  }
+
+  private hit(u: SeaUnit): void {
+    if (u.team !== PLAYER_TEAM) return;
+    const t = this.match.time;
+    const fob = this.match.logistics?.fobs.find((f) => f.hq === u || f.turret === u);
+    if (fob) {
+      if (t - (this.lastBaseAlert.get(fob) ?? -Infinity) > BASE_ATTACK_QUIET_S) {
+        this.notice.show('Your forward base is under attack', 'alert');
+        this.sound?.announce('baseAttacked');
+      }
+      this.lastBaseAlert.set(fob, t);
+      return;
+    }
+    const q = u.squad;
+    if (!q) return;
+    // A squad sent to attack knows it's in a fight.
+    if (t - (this.lastHit.get(q) ?? -Infinity) > UNDER_ATTACK_QUIET_S && q.order.kind !== 'attack') this.say(q, 'underAttack');
+    this.lastHit.set(q, t);
+  }
+
+  private signal(s: MatchSignal): void {
+    const own = 'team' in s && s.team === PLAYER_TEAM;
+    switch (s.kind) {
+      case 'destroyed':
+        return this.destroyed(s.unit, s.by);
+      case 'captured':
+        if (!own) return;
+        this.notice.show(`${s.point.name} captured`);
+        return this.sound?.announce('objective');
+      case 'lost':
+        if (own) this.notice.show(`${s.point.name} lost`, 'alert');
+        return;
+      case 'ended':
+        return this.sound?.announce(s.winner === PLAYER_TEAM ? 'won' : 'lost');
+      case 'fobBuilt':
+        if (!own) return;
+        this.notice.show('Forward base ready');
+        return this.sound?.effect('place');
+      case 'fobLost':
+        if (!own) return this.notice.show('Enemy forward base destroyed');
+        this.notice.show('Your forward base was destroyed', 'alert');
+        return this.sound?.announce('baseDestroyed');
+      case 'outOfSupply':
+        if (!own) return;
+        this.notice.show(s.squad ? `${s.squad.name} is empty: send it to base to fill up` : 'A forward base is out of supply', 'alert');
+        return this.sound?.announce('supplyGone');
+    }
+  }
+
+  private destroyed(unit: SeaUnit, by: SeaUnit): void {
+    const q = unit.squad;
+    if (unit.team === PLAYER_TEAM) {
+      if (!q) return;
+      // A mech's pilot ejects as it goes down.
+      if (unit.kind === 'mech') this.say(q, 'ejecting');
+      if (!q.alive.length) this.notice.show(`${q.name} has been wiped out`, 'alert');
+      return;
+    }
+    // Soldiers fall too often to report each one.
+    if (by.team !== PLAYER_TEAM || !by.squad || unit.kind === 'infantry') return;
+    const t = this.match.time;
+    if (t - (this.lastKill.get(by.squad) ?? -Infinity) < KILL_QUIET_S) return;
+    this.lastKill.set(by.squad, t);
+    this.say(by.squad, unit.kind === 'mech' ? 'mechDead' : unit.kind === 'structure' ? 'buildingDead' : 'vehicleDead');
+  }
+
+  /** An enemy squad seen for the first time in a while: the squad of ours nearest it reports the contact. */
+  private contacts(t: number): void {
+    const seen = this.world.battle.seenBy(PLAYER_TEAM);
+    const own = this.match.side(PLAYER_TEAM).squads.filter((q) => q.alive.length);
+    for (const side of this.match.sides) {
+      if (side.team === PLAYER_TEAM) continue;
+      for (const enemy of side.squads) {
+        const spotted = enemy.alive.find((u) => seen.has(u));
+        if (!spotted) continue;
+        const last = this.lastSeen.get(enemy);
+        this.lastSeen.set(enemy, t);
+        if (last !== undefined && t - last < CONTACT_FORGET_S) continue;
+        const nearest = own
+          .map((q) => ({ q, d: Math.hypot(q.centroid()![0] - spotted.x, q.centroid()![1] - spotted.z) }))
+          .sort((a, b) => a.d - b.d)[0];
+        if (nearest) this.say(nearest.q, 'sensorContact');
+      }
+    }
+  }
+
+  /** Crippling damage, and refits that have made a squad whole again. */
+  private condition(): void {
+    for (const q of this.match.side(PLAYER_TEAM).squads) {
+      let worst = 1;
+      for (const u of q.alive) {
+        const integrity = u.combat?.integrity ?? 1;
+        worst = Math.min(worst, integrity);
+        if (u.kind !== 'mech' && u.kind !== 'vehicle') continue;
+        if (integrity < CRIPPLED && !this.crippled.has(u)) {
+          this.crippled.add(u);
+          this.say(q, 'crippled');
+        } else if (integrity > CRIPPLED + 0.2) this.crippled.delete(u);
+      }
+      for (const u of this.crippled) if (!u.alive) this.crippled.delete(u);
+      if (worst < REFIT_REPORT_BELOW) this.damaged.add(q);
+      else if (worst >= WHOLE && q.missing === 0 && this.damaged.delete(q)) this.say(q, 'refitDone');
+    }
+  }
+
+  /** The enemy standing on one of the player's points with nobody of theirs there: the alarm. */
+  private pointsAtRisk(t: number): void {
+    const enemy = this.match.sides.find((s) => s.team !== PLAYER_TEAM)!.team;
+    const next = this.match.capturable(enemy);
+    this.match.points.forEach((p, i) => {
+      if (p.owner !== PLAYER_TEAM || i !== next || !p.present[enemy] || p.present[PLAYER_TEAM]) return;
+      const last = this.lastPointAlert.get(i) ?? -Infinity;
+      this.lastPointAlert.set(i, t);
+      if (t - last <= POINT_ALERT_QUIET_S) return;
+      this.notice.show(`The enemy is taking ${p.name}`, 'alert');
+      this.sound?.effect('alarm');
+    });
+  }
+
+  private say(q: Squad, message: RadioMessage): void {
+    this.sound?.say(q, q.spec.voice, message);
+  }
+}

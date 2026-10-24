@@ -12,6 +12,7 @@
 //   maps/<mission>/units.json      mission units, mech animation metadata, and the scenarios' unit types and props
 //   maps/<mission>/combat.json     weapons, ammunition, and each unit type's armour and loadout
 //   models/props/*.glb, models/mechs/*.glb
+//   sound/sound.json               the squads' voices, Betty's lines and interface effects (sound/**/*.wav, as MC2's)
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -30,6 +31,7 @@ import {
 import { ComponentTable, readGunnery, readMechStats, readTurretStats, readVehicleStats, type MechStats, type VehicleStats } from './lib/combat-data.ts';
 import { buildModel, TextureLibrary } from './lib/model.ts';
 import { readScenarios, scenarioNeeds } from './lib/scenario.ts';
+import { soundSet } from './lib/sound.ts';
 import { SourceData } from './lib/srcdata.ts';
 import { decodeTga } from './lib/tga.ts';
 
@@ -292,9 +294,20 @@ json(`${mapDir}/combat.json`, {
 });
 json('manifest.json', { maps: [missionName] });
 
+// --- Sound -----------------------------------------------------------------------
+// MC2's WAVs as they are (mono PCM, 11 or 22 kHz: a second or two each), which every browser decodes.
+const sounds = soundSet(src, needs.voices);
+let soundBytes = 0;
+for (const [rel, from] of sounds.files) {
+  if (src.has(from)) soundBytes += write(`sound/${rel}`, src.read(from));
+  else console.warn(`  missing sound ${from}: run npm run fetch-data`);
+}
+json('sound/sound.json', sounds.manifest);
+
 console.log(
   `${models.specs.size} models (${(totalBytes / 1024 / 1024).toFixed(1)} MB), ${placed.length}/${mission.objects.length} objects placed, ${units.length}/${mission.parts.length} units`,
 );
+console.log(`${sounds.files.size} sounds (${(soundBytes / 1024 / 1024).toFixed(1)} MB) for ${needs.voices.length} voices`);
 for (const [reason, n] of models.unresolved) console.warn(`  skipped ${n}x ${reason}`);
 if (textures.missing.size) console.warn(`  missing textures: ${[...textures.missing].join(', ')}`);
 if (upscaled) console.log(`  ${textures.upscaledCount} model textures from the 4x upscales`);

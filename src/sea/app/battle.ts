@@ -91,8 +91,10 @@ export class Battle {
   onEvent: (text: string, team: number) => void = () => {};
   /** Shots land and show, but do no damage (the battle survey's steady fight). */
   immortal = false;
-  /** Called when a unit is destroyed (a match charges its side tickets). */
-  onDestroyed: (u: SeaUnit) => void = () => {};
+  /** Called when a unit is destroyed, and by whom (a match charges its side tickets, and the radio reports kills). */
+  onDestroyed: (u: SeaUnit, by: SeaUnit) => void = () => {};
+  /** Called when a shot damages a unit that survives it (the radio: under attack). */
+  onHit: (u: SeaUnit, by: SeaUnit) => void = () => {};
   /** Decide the battle when one side is wiped out (a match decides its own). */
   judgeOutcome = true;
   private tickIn = 0;
@@ -365,7 +367,10 @@ export class Battle {
     if (!p.location || !t.alive || !t.combat || this.immortal) return;
     const report = t.combat.takeHit(p.location, p.damage, this.rng);
     if (!t.alive) this.destroyed(t, p.attacker, report);
-    else this.wounded(t, report, p.point);
+    else {
+      this.wounded(t, report, p.point);
+      this.onHit(t, p.attacker);
+    }
   }
 
   private wounded(t: SeaUnit, report: HitReport, point: V3): void {
@@ -384,7 +389,7 @@ export class Battle {
   private destroyed(t: SeaUnit, by: SeaUnit, report: HitReport): void {
     t.die(arcOf(t.x, t.z, t.rotation, by.x, by.z) === 'front');
     this.world.unitDied(t);
-    this.onDestroyed(t);
+    this.onDestroyed(t, by);
     for (const u of this.world.units) if (u.target === t) u.target = null;
     if (t.kind === 'infantry') {
       // A soldier just falls: a puff of dust where he stood, and no wreck (and no line in the log).

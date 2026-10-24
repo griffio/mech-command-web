@@ -1,7 +1,7 @@
 # Mech Command Web
 
 A small MechCommander 2-style skirmish for iPad and desktop browsers, reusing
-the original game's maps, buildings and mechs. No native code: the original
+the original game's maps, buildings, mechs and voices. No native code: the original
 data is converted offline into glTF, WebP, PNG and JSON.
 
 - **The game** (`index.html`) draws with WebGPU: the FFT sea and physically based
@@ -116,15 +116,30 @@ AI commander.
   mechs take ground fast, infantry are flown in to hold it.
 - **Forward bases.** Each side has a logistics squad: MC2's repair truck,
   carrying its 500 refit points as supply. Select it, press **Build FOB** and
-  tap a spot: it drives there and spends 300 supply raising MC2's HQ tent behind
-  sandbags, guarded by an autocannon turret (two AC10s, its own gunner). A forward
-  base must be 300 m from your main base and other forward bases. Wiped-out
+  tap a spot (red rings show where it can't go: within 300 m of your main base
+  and other forward bases, or 250 m of the enemy's): it drives there, a ring
+  marking the spot, and spends 15 seconds and 300 supply raising MC2's HQ tent
+  behind sandbags, guarded by an autocannon turret (two AC10s, its own gunner).
+  A countdown shows over the truck, and another order calls the build off. Wiped-out
   squads come back at the one nearest the front, squads there reinforce and
   refit, and the Karnov flies from it; all of that costs its supply (a mech its
   weight twice over, a soldier 10). A truck standing at the main base fills up;
-  one standing at a forward base unloads into it. Destroy the tent and the base
-  is gone (10 tickets). The AI builds a forward base back from the point it's
-  attacking and keeps it supplied.
+  one standing at a forward base unloads into it. The battle log says when a
+  truck is empty, when a forward base runs dry, and when a squad came back at
+  the main base because no forward base could pay for it. Destroy the tent and
+  the base is gone (10 tickets). The AI builds a forward base back from the point
+  it's attacking and keeps it supplied.
+- **Radio.** Your squads answer over the radio in MC2's pilots' voices (each squad
+  its own, set in the scenario): acknowledging orders, refusing ones they can't
+  carry out ("can't get there", an illegal order), and calling out new contacts,
+  attacks, crippled mechs, ejecting pilots, kills and finished refits. They follow
+  MC2's radio rules (`sound/radio.csv`): one voice at a time, the most urgent
+  first, stale lines dropped. Betty, MC2's computer voice, announces points
+  taken, a forward base under attack or destroyed, supply run out, and the
+  result. A refused order also shows why in the middle of the screen, with MC2's
+  buzz, and the alarm sounds when the enemy starts taking one of your points.
+  **Sound on/off** (top right) is remembered. On iPad, sound starts with the
+  first tap and plays even with the silent switch on.
 
 The AI sends most of its squads at the point it can take next, holds the
 one it must keep with the rest, stands its LRM carriers off behind the attack,
@@ -234,8 +249,8 @@ adapter's features. The report goes to the same `/api/perf` endpoint.
 | Path | What |
 |---|---|
 | `tools/fetch-srcdata.ts` | Sparse, blobless checkout of [alariq/mc2srcdata](https://github.com/alariq/mc2srcdata), resolving the files a mission needs |
-| `tools/convert.ts` | Mission → `public/assets/maps/<mission>/` and `public/assets/models/` |
-| `tools/lib/` | Readers for `.pak`, `.fit`, `.tga`, `.ase` and remote zips, the glTF builder, and the combat data export |
+| `tools/convert.ts` | Mission → `public/assets/maps/<mission>/`, `public/assets/models/` and `public/assets/sound/` |
+| `tools/lib/` | Readers for `.pak`, `.fit`, `.tga`, `.ase` and remote zips, the glTF builder, the combat data export, and the choice of sounds (`sound.ts`) |
 | `src/sea/` | The WebGPU game (`main.ts`, `app/`, `models/`, `render/`, `sim/`) |
 | `src/sea/sim/combat.ts`, `src/sea/app/battle.ts` | MC2's combat rules, and the battle that runs on them |
 | `docs/screenshots/` | The pictures in this README |
@@ -247,7 +262,10 @@ start), `elevation.bin` (Float32 heights), `colormap.webp`, `objects.json`
 (about 1,000 placed buildings and trees), `units.json` (mission units with their
 pilots' gunnery, plus gesture speeds), `combat.json` (weapons, ammunition, and
 each unit type's armour, structure, loadout and crit slots), and `move.bin` (the
-300×300 movement grid).
+300×300 movement grid). Shared by every mission: `sound/sound.json` (each radio
+message's priority and shelf life from `radio.csv`, the scenarios' voices' lines
+for each message, Betty's lines by their `BETTY_*` number, and interface effects)
+and MC2's WAVs as they are (about 3.4 MB for five voices).
 
 ## How the conversion follows the engine
 
@@ -293,8 +311,10 @@ Checks done against mc2_01:
   (`<mech>fallforwarddam.ase`, `fallbackwarddam.ase`); a destroyed vehicle becomes
   `<vehicle>dam.ase` with a `dam` texture. Here arms stay on (their weapons just
   stop), and wrecks are the intact model painted in soot.
-- Trees don't block sight, there's no fog of war, and enemies close and fire
-  rather than following the mission's scripts.
+- Trees don't block sight, and enemies close and fire rather than following the
+  mission's scripts.
+- There are no weapon, explosion or footstep sounds, and no music, though MC2's
+  are in the source data (`sound/sfx_*.wav`, `sound/music*.wav`).
 - The original 1280² colour map is blurry close up; use `--upscaled`.
 - Headless browsers on an Intel Mac can't stand in for an iPad when timing (they
   render even a near-empty scene at ~15 fps); measure on the device.
@@ -302,7 +322,7 @@ Checks done against mc2_01:
 ## Licence
 
 The engine code these rules come from is GPL v3 (alariq's port) on top of
-Microsoft's Shared Source release. The MechCommander 2 art may be used and
+Microsoft's Shared Source release. The MechCommander 2 art (and sound) may be used and
 redistributed **for non-commercial purposes only**, and the licence grants no rights
 to Microsoft's trademarks (see `EULA.txt` in the engine repository). That's why
 `vendor/` and `public/assets/` are git-ignored: anyone building this fetches and

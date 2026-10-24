@@ -59,6 +59,15 @@ export interface CapturePoint {
   present: [number, number];
 }
 
+/** What happened, for the radio and the notices (the battle log has its own words for these, from onEvent). */
+export type MatchSignal =
+  | { kind: 'destroyed'; unit: SeaUnit; by: SeaUnit }
+  | { kind: 'captured' | 'lost'; point: CapturePoint; team: number }
+  | { kind: 'ended'; winner: number }
+  | { kind: 'fobBuilt' | 'fobLost'; team: number }
+  /** A truck (its squad) or a forward base (squad null) has run out of supply. */
+  | { kind: 'outOfSupply'; team: number; squad: Squad | null };
+
 export interface Side {
   team: number;
   name: string;
@@ -75,6 +84,7 @@ export class Match {
   winner: number | null = null;
   /** Kills aren't reported here (the battle does that); captures, losses, reinforcements and the result are. */
   onEvent: (text: string, team: number) => void = () => {};
+  onSignal: (signal: MatchSignal) => void = () => {};
   time = 0;
   /** AI commanders, by team (the player's side has none, unless a test adds one). */
   readonly commanders = new Map<number, CommanderAI>();
@@ -138,7 +148,7 @@ export class Match {
       world.addMarker(ring, side.base.x, side.base.z, 1);
       await Promise.all(side.squads.map((squad, i) => match.deploy(side, squad, i)));
     }
-    world.battle.onDestroyed = (u) => match.lost(u);
+    world.battle.onDestroyed = (u, by) => match.lost(u, by);
     world.battle.judgeOutcome = false;
     match.commanders.set(1, new CommanderAI(match, world, 1));
     return match;
@@ -182,10 +192,11 @@ export class Match {
   }
 
   /** A unit died: its side pays for it in tickets. */
-  private lost(u: SeaUnit): void {
+  private lost(u: SeaUnit, by: SeaUnit): void {
     this.dead.set(u, this.time);
     const side = this.sides.find((s) => s.team === u.team);
     if (side) side.tickets -= ticketCost(u);
+    this.onSignal({ kind: 'destroyed', unit: u, by });
   }
 
   private capture(dt: number): void {
@@ -218,8 +229,12 @@ export class Match {
       if (was !== null) {
         this.side(was).tickets -= POINT_TICKETS;
         this.onEvent(`${p.name} lost by ${this.side(was).name} (−${POINT_TICKETS} tickets)`, was);
+        this.onSignal({ kind: 'lost', point: p, team: was });
       }
-      if (p.owner !== null) this.onEvent(`${this.side(p.owner).name} captured ${p.name}`, p.owner);
+      if (p.owner !== null) {
+        this.onEvent(`${this.side(p.owner).name} captured ${p.name}`, p.owner);
+        this.onSignal({ kind: 'captured', point: p, team: p.owner });
+      }
     });
   }
 
@@ -269,21 +284,22 @@ export class Match {
             squad.respawnAt = this.time + (squad.spec.units.some((t) => this.world.typeKind(t) === 'mech') ? RESPAWN_S.mech : RESPAWN_S.other);
           } else if (this.time >= squad.respawnAt) {
             squad.respawnAt = null;
-            const point = this.respawnPoint(side, squad);
+            const { point, why } = this.respawnPoint(side, squad);
             void this.deploy(side, squad, i, Infinity, point);
-            this.onEvent(`${side.name}: squad ${squad.name} back at ${point.fob ? 'a forward base' : 'base'}`, side.team);
+            this.onEvent(`${side.name}: squad ${squad.name} back at ${point.fob ? 'a forward base' : 'base'}${why ? ` (${why})` : ''}`, side.team);
           }
           return;
         }
         const point = this.logistics?.pointFor(side.team, alive) ?? (alive.every((u) => Math.hypot(u.x - side.base.x, u.z - side.base.z) <= BASE_RADIUS) ? this.mainBase(side) : null);
         if (!point || alive.some((u) => u.embarked)) return;
         if (!point.fob || this.logistics!.pay(point, this.logistics!.refitCost(alive) * dt)) for (const u of alive) u.combat?.refit(dt, REFIT_RATE);
+        else this.logistics!.short(point.fob, squad, 'refit');
         if (squad.missing > 0 && this.time >= squad.reinforceAt && this.spawning === 0) {
           const next = this.missingTypes(squad)[0]!;
           if (!this.logistics || this.logistics.pay(point, this.logistics.costOf(next))) {
             squad.reinforceAt = this.time + REINFORCE_S;
             void this.deploy(side, squad, i, 1, point);
-          }
+          } else if (point.fob) this.logistics.short(point.fob, squad, 'reinforce');
         }
       });
     }
@@ -293,14 +309,23 @@ export class Match {
     return { x: side.base.x, z: side.base.z, radius: BASE_RADIUS, fob: null };
   }
 
-  /** Where a wiped-out squad comes back, paid for: trucks always at the main base (to fill up). */
-  private respawnPoint(side: Side, squad: Squad): ServicePoint {
+  /**
+   * Where a wiped-out squad comes back, paid for: trucks always at the main base (to fill up). For the player, why it
+   * isn't a forward base when there is one.
+   */
+  private respawnPoint(side: Side, squad: Squad): { point: ServicePoint; why: string | null } {
     const L = this.logistics;
-    if (!L || squad.spec.units.every((t) => t === L.spec.truck)) return this.mainBase(side);
+    if (!L || squad.spec.units.every((t) => t === L.spec.truck)) return { point: this.mainBase(side), why: null };
     const cost = squad.spec.units.reduce((s, t) => s + L.costOf(t), 0);
     const point = L.respawnPoint(side.team, cost);
     L.pay(point, cost);
-    return point;
+    const fobs = L.fobs.filter((f) => f.team === side.team);
+    if (point.fob || !fobs.length || side.team !== PLAYER_TEAM) return { point, why: null };
+    const why =
+      fobs.length === 1
+        ? `the forward base has ${Math.floor(fobs[0]!.supply)} of the ${cost} supply it takes`
+        : `no forward base has the ${cost} supply it takes`;
+    return { point, why };
   }
 
   /** The unit types a squad is missing. */
@@ -375,6 +400,7 @@ export class Match {
   private end(winner: number, reason: string): void {
     this.winner = winner;
     this.onEvent(`${winner === PLAYER_TEAM ? 'Victory' : 'Defeat'}: ${reason}`, winner);
+    this.onSignal({ kind: 'ended', winner });
   }
 
   /** Recolour a point's ring and raise its holder's flag. */

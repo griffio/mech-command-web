@@ -108,11 +108,15 @@ export class Squad {
     return 'holding';
   }
 
-  /** Move in formation to a point: each member to a slot about it, the nearest members taking the middle slots. */
-  move(world: World, x: number, z: number, retreat = false): void {
+  /**
+   * Move in formation to a point: each member to a slot about it, the nearest members taking the middle slots. Returns
+   * how many members have a way there.
+   */
+  move(world: World, x: number, z: number, retreat = false): number {
     this.order = retreat ? { kind: 'retreat', x, z } : { kind: 'move', x, z };
     const alive = this.alive.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
     const slots = formationSlots(alive.length, this.spacing);
+    let routed = 0;
     alive.forEach((u, i) => {
       const [sx, sz] = world.openNear(x + slots[i]![0], z + slots[i]![1], u.moveClass);
       const grid = world.gridFor(u);
@@ -121,8 +125,13 @@ export class Squad {
       u.attackOrder = null;
       u.engaging = false;
       u.leash = { x, z };
-      if (route) u.walkTo(route);
+      // No way there: it stops rather than carry on with the old order.
+      if (route) {
+        u.walkTo(route);
+        routed++;
+      } else u.stop();
     });
+    return routed;
   }
 
   attack(target: SeaUnit): void {
