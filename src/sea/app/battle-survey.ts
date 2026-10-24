@@ -16,6 +16,8 @@ const HALF_Z_M = 45;
 /** The real-time fight stops this long after one side is destroyed (to see the wrecks burn), or at the cap. */
 const AFTERMATH_MS = 6000;
 const LIVE_CAP_MS = 100_000;
+/** Real time with the units standing, before the fight: the page's frame pacing with nothing happening. */
+const STANDING_MS = 10_000;
 
 const BATTLE_STEPS: SurveyStep[] = [
   { name: 'baseline: standing', scale: 1, flags: {}, everyView: true },
@@ -36,6 +38,7 @@ export interface CameraView {
 export interface BattleSurveyResult {
   arena: { x: number; z: number; units: number };
   rows: SurveyRow[];
+  standing: LiveSample;
   live: LiveSample & { outcome: string | null; destroyed: number };
 }
 
@@ -62,9 +65,13 @@ export async function runBattleSurvey(
     world.battle.immortal = false;
   }
 
-  log('The fight in real time, one frame per refresh at full resolution, until one side is destroyed…');
   stage(world, arena);
   views[0]!.apply();
+  const counters = () => ({ ...sea.fxCounts, ...world.battle.counts });
+  log('Real time, one frame per refresh at full resolution: 10 s standing…');
+  const standing = await survey.sampleLive(STANDING_MS, () => false, counters, false);
+  log(describe(standing));
+  log('…then the fight, until one side is destroyed');
   let decidedAt: number | null = null;
   const live = await survey.sampleLive(
     LIVE_CAP_MS,
@@ -72,17 +79,25 @@ export async function runBattleSurvey(
       if (world.battle.outcome && decidedAt === null) decidedAt = performance.now();
       return decidedAt !== null && performance.now() - decidedAt > AFTERMATH_MS;
     },
-    () => ({ ...sea.fxCounts, ...world.battle.counts }),
+    counters,
   );
   const destroyed = fighters.filter((u) => !u.alive).length;
-  log(
-    `${live.seconds.toFixed(0)} s, ${live.fps.toFixed(1)} fps: refresh p50 ${live.intervalMs.p50.toFixed(1)} / p99 ${live.intervalMs.p99.toFixed(1)} / ` +
-      `max ${live.intervalMs.max.toFixed(1)} ms, ${live.over20} frames over 20 ms; JavaScript p50 ${live.jsMs.p50.toFixed(2)} / ` +
-      `max ${live.jsMs.max.toFixed(1)} ms; peaks ${Object.entries(live.peaks).map(([k, v]) => `${k} ${v}`).join(', ')}; ` +
-      `${destroyed} destroyed, ${world.battle.outcome ?? 'undecided'}`,
-  );
+  log(`${describe(live)}; ${destroyed} destroyed, ${world.battle.outcome ?? 'undecided'}`);
   log('Reload the page to play the mission again.');
-  return { arena: { x: arena.x, z: arena.z, units: fighters.length }, rows, live: { ...live, outcome: world.battle.outcome, destroyed } };
+  return {
+    arena: { x: arena.x, z: arena.z, units: fighters.length },
+    rows,
+    standing,
+    live: { ...live, outcome: world.battle.outcome, destroyed },
+  };
+}
+
+function describe(s: LiveSample): string {
+  return (
+    `${s.seconds.toFixed(0)} s, ${s.fps.toFixed(1)} fps: refresh p50 ${s.intervalMs.p50.toFixed(1)} / p99 ${s.intervalMs.p99.toFixed(1)} / ` +
+    `max ${s.intervalMs.max.toFixed(1)} ms, ${s.over20} over 20 ms, ${s.over33} over 33 ms; JavaScript p50 ${s.jsMs.p50.toFixed(2)} / ` +
+    `max ${s.jsMs.max.toFixed(1)} ms; peaks ${Object.entries(s.peaks).map(([k, v]) => `${k} ${v}`).join(', ')}`
+  );
 }
 
 /** The centre of the box of open, dry, unforested ground with the fewest bad cells in it (the first such, scanning). */

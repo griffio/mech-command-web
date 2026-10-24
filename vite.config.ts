@@ -57,11 +57,11 @@ function perfReports(): Plugin {
         const range = r.costLowMs !== undefined ? `${r.costLowMs.toFixed(2)}-${(r.costHighMs ?? r.costMs).toFixed(2)}` : r.costMs.toFixed(2);
         console.log(`  ${(r.view ?? '').padEnd(12)} ${r.name.padEnd(30)} ${range.padStart(11)} ms${r.clipped ? '*' : ' '}  (${r.deltaMs >= 0 ? '+' : ''}${r.deltaMs.toFixed(2)})`);
       }
-      // The battle survey's fight in real time.
-      const live = report.live;
-      if (live) {
+      // The battle survey in real time: the units standing, then the fight.
+      for (const [name, live] of [['standing', report.standing], ['live fight', report.live]] as const) {
+        if (!live) continue;
         console.log(
-          `  live fight: ${live.seconds.toFixed(0)} s at ${live.fps.toFixed(1)} fps, refresh p99 ${live.intervalMs.p99.toFixed(1)} ms, ` +
+          `  ${name}: ${live.seconds.toFixed(0)} s at ${live.fps.toFixed(1)} fps, refresh p99 ${live.intervalMs.p99.toFixed(1)} ms, ` +
             `${live.over20} frames over 20 ms, JavaScript p50 ${live.jsMs.p50.toFixed(2)} ms max ${live.jsMs.max.toFixed(1)} ms`,
         );
       }
@@ -76,10 +76,19 @@ function perfReports(): Plugin {
   };
 }
 
+interface LiveSummary {
+  seconds: number;
+  fps: number;
+  intervalMs: { p99: number };
+  over20: number;
+  jsMs: { p50: number; max: number };
+}
+
 interface PerfReportSummary {
   label?: string;
   scenarios?: { name: string; fps: number; frameMs: { p95: number } }[];
-  live?: { seconds: number; fps: number; intervalMs: { p99: number }; over20: number; jsMs: { p50: number; max: number } };
+  standing?: LiveSummary;
+  live?: LiveSummary;
   rows?: { view?: string; name: string; costMs: number; costLowMs?: number; costHighMs?: number; deltaMs: number; clipped: boolean }[];
 }
 

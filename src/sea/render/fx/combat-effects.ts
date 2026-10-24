@@ -51,16 +51,28 @@ export class CombatEffects {
     });
   }
 
-  /** The head of a missile in flight (call each frame at its position) and the smoke it leaves. */
-  missile(at: V3, smoke = true): void {
-    this.glow(at, 1.1, 0.5, 0.06, [1, 0.7, 0.35], 6);
-    if (smoke) {
-      this.particles.spawn({
-        x: at[0], y: at[1], z: at[2], vx: this.jitter(0.6), vy: 0.3 + this.jitter(0.3), vz: this.jitter(0.6),
-        size0: 0.7, size1: 3.2, life: 1.4 + this.rng.next(), r: 0.82, g: 0.82, b: 0.8, alpha: 0.5, kind: PUFF,
-        drag: 0.5, gravity: -0.4, wind: 0.3, spin: this.jitter(1), fadeIn: 0.05, fadePow: 1.4,
-      });
-    }
+  /** Start a world update: the missile heads placed by the last one are taken away. */
+  beginUpdate(): void {
+    this.particles.clearTransients();
+  }
+
+  /** The glowing head of a missile in flight, placed afresh every world update (nothing is spawned or kept). */
+  missileHead(x: number, y: number, z: number): void {
+    this.particles.addTransientGlow(x, y, z, 1, 1, 0.7, 0.35, 6);
+  }
+
+  /** A puff of a missile's smoke trail (a few dozen a second per trail, not one a frame). */
+  missileSmoke(x: number, y: number, z: number): void {
+    this.particles.spawn({
+      x, y, z, vx: this.jitter(0.6), vy: 0.3 + this.jitter(0.3), vz: this.jitter(0.6),
+      size0: 0.8, size1: 3.4, life: 1.2 + this.rng.next() * 0.8, r: 0.82, g: 0.82, b: 0.8, alpha: 0.5, kind: PUFF,
+      drag: 0.5, gravity: -0.4, wind: 0.3, spin: this.jitter(1), fadeIn: 0.05, fadePow: 1.4,
+    });
+  }
+
+  /** One of a rack's lesser missiles landing: just a flash (the rack's lead missile makes the real impact). */
+  pop(at: V3): void {
+    this.glow(at, 1.8, 0.6, 0.12, [1, 0.65, 0.3], 5);
   }
 
   /** A hit on a unit: a flash, sparks and a puff of smoke, scaled to the damage (1 = an average shot). */

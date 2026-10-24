@@ -18,6 +18,8 @@ const ROUTES_PER_TICK = 2;
 const REROUTE_S = 2;
 /** Seconds a wreck burns. */
 const BURN_S = 40;
+/** Seconds between puffs of a missile's smoke trail. */
+const SMOKE_INTERVAL_S = 0.04;
 /** Flight speeds, metres a second (the original's bolt files); lasers and PPCs are instant. */
 const SPEED = { autocannon: 550, heavyAutocannon: 500, mg: 900, srm: 200, lrm: 250 };
 
@@ -47,7 +49,10 @@ interface Payload {
   scale: number;
 }
 
-/** A missile in flight, drawn each frame; one of a rack's carries the rack's payload. */
+/**
+ * A missile in flight, drawn each frame. A rack's lead missile carries the rack's payload, trails the smoke and makes the
+ * impact; the rest of the rack fly beside it with their heads alight.
+ */
 interface Missile {
   from: V3;
   to: V3;
@@ -57,6 +62,9 @@ interface Missile {
   loft: number;
   payload: Payload | null;
   hit: boolean;
+  lead: boolean;
+  /** Game time of its next puff of smoke (lead missiles only). */
+  smokeAt: number;
 }
 
 interface Wreck {
@@ -75,7 +83,6 @@ export class Battle {
   /** Shots land and show, but do no damage (the battle survey's steady fight). */
   immortal = false;
   private tickIn = 0;
-  private frame = 0;
   private routes = 0;
   private readonly rng = new Rng(0x4d433221);
   private readonly payloads: Payload[] = [];
@@ -95,7 +102,6 @@ export class Battle {
 
   update(dt: number): void {
     this.time += dt;
-    this.frame++;
     this.tickIn -= dt;
     if (this.tickIn <= 0) {
       this.tickIn += COMBAT_TICK;
@@ -274,6 +280,8 @@ export class Battle {
           loft: lrm ? 8 + distance * 0.18 : 1 + this.rng.next() * 1.5,
           payload: i === 0 ? payload(arrive, false) : null,
           hit,
+          lead: i === 0,
+          smokeAt: launch,
         });
       }
     }
@@ -289,25 +297,29 @@ export class Battle {
     this.payloads.length = w;
   }
 
-  /** Move the missiles, trailing smoke, and blow up the ones that arrive. */
+  /** Move the missiles (heads alight, the leads trailing smoke), and blow up the ones that arrive. */
   private fly(): void {
+    this.fx.beginUpdate();
     let w = 0;
     for (const m of this.missiles) {
       if (this.time >= m.arrive) {
-        if (m.hit) this.fx.hit(m.to, 0.55);
-        else this.fx.groundHit(m.to, 0.6, this.world.terrain.heightAt(m.to[0], m.to[2]) < 0);
+        if (!m.lead) this.fx.pop(m.to);
+        else if (m.hit) this.fx.hit(m.to, 0.7);
+        else this.fx.groundHit(m.to, 0.7, this.world.terrain.heightAt(m.to[0], m.to[2]) < 0);
         if (m.payload) this.strike(m.payload);
         continue;
       }
       this.missiles[w++] = m;
       if (this.time < m.launch) continue;
       const f = (this.time - m.launch) / (m.arrive - m.launch);
-      const at: V3 = [
-        m.from[0] + (m.to[0] - m.from[0]) * f,
-        m.from[1] + (m.to[1] - m.from[1]) * f + m.loft * 4 * f * (1 - f),
-        m.from[2] + (m.to[2] - m.from[2]) * f,
-      ];
-      this.fx.missile(at, (this.frame & 1) === 0);
+      const x = m.from[0] + (m.to[0] - m.from[0]) * f;
+      const y = m.from[1] + (m.to[1] - m.from[1]) * f + m.loft * 4 * f * (1 - f);
+      const z = m.from[2] + (m.to[2] - m.from[2]) * f;
+      this.fx.missileHead(x, y, z);
+      if (m.lead && this.time >= m.smokeAt) {
+        this.fx.missileSmoke(x, y, z);
+        m.smokeAt = this.time + SMOKE_INTERVAL_S;
+      }
     }
     this.missiles.length = w;
   }

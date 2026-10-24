@@ -8,6 +8,9 @@ import skyMap from '../shaders/sky_map.wgsl?raw';
 import particlesWgsl from './particles.wgsl?raw';
 
 export const MAX_PARTICLES = 4096;
+/** Glows placed afresh every world update (missile heads), drawn after the particles. */
+const MAX_TRANSIENT = 512;
+const TRANSIENT_FLOATS = 8;
 const FLOATS_PER_INSTANCE = 12;
 
 export const PUFF = 0;
@@ -104,7 +107,8 @@ export interface ParticleSystemOptions {
 
 /**
  * CPU-simulated particles drawn as instanced billboards. A few thousand at most, so the simulation and the per-frame
- * upload are cheap, and the sorting back to front that alpha blending needs is done here too.
+ * upload are cheap, and the sorting back to front that alpha blending needs is done here too. Dead particles are kept
+ * for reuse, so a busy battle doesn't make garbage for the collector to stop the page over.
  */
 export class ParticleSystem {
   /** Wind velocity the smoke and spray are carried along at, m/s. */
@@ -113,7 +117,12 @@ export class ParticleSystem {
   seaHeight: ((x: number, z: number) => number) | null = null;
 
   private readonly live: Particle[] = [];
-  private readonly staging = new Float32Array(MAX_PARTICLES * FLOATS_PER_INSTANCE);
+  private readonly pool: Particle[] = [];
+  /** Where the search for a particle to give way starts when the system is full; it rolls on. */
+  private evictAt = 0;
+  private readonly transient = new Float64Array(MAX_TRANSIENT * TRANSIENT_FLOATS);
+  private transientCount = 0;
+  private readonly staging = new Float32Array((MAX_PARTICLES + MAX_TRANSIENT) * FLOATS_PER_INSTANCE);
   private readonly buffer: GPUBuffer;
   private count = 0;
   private seedCounter = 1;
@@ -204,44 +213,80 @@ export class ParticleSystem {
   }
 
   clear(): void {
+    for (const p of this.live) this.pool.push(p);
     this.live.length = 0;
     this.count = 0;
+    this.transientCount = 0;
   }
 
   spawn(d: ParticleDesc): void {
+    let p: Particle;
     if (this.live.length >= MAX_PARTICLES) {
-      // Full: the oldest particle gives way (the list is in birth order).
-      this.live.shift();
+      p = this.victim();
+    } else {
+      p = this.pool.pop() ?? newParticle();
+      this.live.push(p);
     }
-    this.live.push({
-      x: d.x,
-      y: d.y,
-      z: d.z,
-      vx: d.vx ?? 0,
-      vy: d.vy ?? 0,
-      vz: d.vz ?? 0,
-      size0: d.size0,
-      size1: d.size1,
-      age: 0,
-      life: d.life,
-      r: d.r,
-      g: d.g,
-      b: d.b,
-      alpha: d.alpha,
-      kind: d.kind ?? PUFF,
-      drag: d.drag ?? 0,
-      gravity: d.gravity ?? 0,
-      wind: d.wind ?? 0,
-      rot: (this.seedCounter * 2.399963) % (Math.PI * 2),
-      spin: d.spin ?? 0,
-      fadeIn: d.fadeIn ?? 0,
-      fadePow: d.fadePow ?? 1,
-      dieAtSea: d.dieAtSea ?? false,
-      layer: d.layer ?? LAYER_DEFAULT,
-      seed: (this.seedCounter++ * 0.6180339887) % 1,
-      d2: 0,
-      float: d.seaOffset ?? Number.NaN,
-    });
+    p.x = d.x;
+    p.y = d.y;
+    p.z = d.z;
+    p.vx = d.vx ?? 0;
+    p.vy = d.vy ?? 0;
+    p.vz = d.vz ?? 0;
+    p.size0 = d.size0;
+    p.size1 = d.size1;
+    p.age = 0;
+    p.life = d.life;
+    p.r = d.r;
+    p.g = d.g;
+    p.b = d.b;
+    p.alpha = d.alpha;
+    p.kind = d.kind ?? PUFF;
+    p.drag = d.drag ?? 0;
+    p.gravity = d.gravity ?? 0;
+    p.wind = d.wind ?? 0;
+    p.rot = (this.seedCounter * 2.399963) % (Math.PI * 2);
+    p.spin = d.spin ?? 0;
+    p.fadeIn = d.fadeIn ?? 0;
+    p.fadePow = d.fadePow ?? 1;
+    p.dieAtSea = d.dieAtSea ?? false;
+    p.layer = d.layer ?? LAYER_DEFAULT;
+    p.seed = (this.seedCounter++ * 0.6180339887) % 1;
+    p.d2 = 0;
+    p.float = d.seaOffset ?? Number.NaN;
+  }
+
+  /** Full: of a few particles from a rolling start, the one furthest through its life gives way (no list shifting). */
+  private victim(): Particle {
+    const live = this.live;
+    const n = live.length;
+    let best = live[this.evictAt % n]!;
+    for (let k = 1; k < 4; k++) {
+      const p = live[(this.evictAt + k) % n]!;
+      if (p.age / p.life > best.age / best.life) best = p;
+    }
+    this.evictAt = (this.evictAt + 4) % n;
+    return best;
+  }
+
+  /** Forget the glows added since the last call (a missile's head is placed afresh every world update). */
+  clearTransients(): void {
+    this.transientCount = 0;
+  }
+
+  /** A glow drawn as it is until clearTransients(), with no simulation and nothing kept: a missile's head. */
+  addTransientGlow(x: number, y: number, z: number, size: number, r: number, g: number, b: number, brightness: number): void {
+    if (this.transientCount >= MAX_TRANSIENT) return;
+    const t = this.transient;
+    const o = this.transientCount++ * TRANSIENT_FLOATS;
+    t[o] = x;
+    t[o + 1] = y;
+    t[o + 2] = z;
+    t[o + 3] = size;
+    t[o + 4] = r;
+    t[o + 5] = g;
+    t[o + 6] = b;
+    t[o + 7] = brightness;
   }
 
   update(dt: number): void {
@@ -255,7 +300,10 @@ export class ParticleSystem {
     for (let i = 0; i < this.live.length; i++) {
       const p = this.live[i]!;
       p.age += dt;
-      if (p.age >= p.life) continue;
+      if (p.age >= p.life) {
+        this.pool.push(p);
+        continue;
+      }
       const k = Math.exp(-p.drag * dt);
       p.vx *= k;
       p.vy *= k;
@@ -271,7 +319,10 @@ export class ParticleSystem {
       p.z += p.vz * dt;
       p.rot += p.spin * dt;
       if (p.float === p.float) p.y = (this.seaHeight ? this.seaHeight(p.x, p.z) : 0) + p.float;
-      else if (p.dieAtSea && p.y < 0 && p.vy < 0) continue;
+      else if (p.dieAtSea && p.y < 0 && p.vy < 0) {
+        this.pool.push(p);
+        continue;
+      }
       this.live[w++] = p;
     }
     this.live.length = w;
@@ -310,6 +361,25 @@ export class ParticleSystem {
       f[o++] = p.seed;
       f[o++] = 0;
     }
+    // The transient glows go last, unsorted: they are additive, so only a puff in front of one would be wrong (it shows
+    // through), and a missile's head barely lasts long enough to be seen that way.
+    const t = this.transient;
+    for (let i = 0; i < this.transientCount; i++) {
+      const s = i * TRANSIENT_FLOATS;
+      f[o++] = t[s]! - camX;
+      f[o++] = t[s + 1]! - camY;
+      f[o++] = t[s + 2]! - camZ;
+      f[o++] = t[s + 3]!;
+      f[o++] = t[s + 4]!;
+      f[o++] = t[s + 5]!;
+      f[o++] = t[s + 6]!;
+      f[o++] = t[s + 7]!;
+      f[o++] = 0;
+      f[o++] = GLOW;
+      f[o++] = (i * 0.6180339887) % 1;
+      f[o++] = 0;
+      n++;
+    }
     this.count = n;
     if (this.count > 0) this.device.queue.writeBuffer(this.buffer, 0, f, 0, this.count * FLOATS_PER_INSTANCE);
   }
@@ -326,4 +396,11 @@ export class ParticleSystem {
   destroy(): void {
     this.buffer.destroy();
   }
+}
+
+function newParticle(): Particle {
+  return {
+    x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, size0: 0, size1: 0, age: 0, life: 0, r: 0, g: 0, b: 0, alpha: 0, kind: PUFF, drag: 0,
+    gravity: 0, wind: 0, rot: 0, spin: 0, fadeIn: 0, fadePow: 1, dieAtSea: false, layer: LAYER_DEFAULT, seed: 0, d2: 0, float: Number.NaN,
+  };
 }

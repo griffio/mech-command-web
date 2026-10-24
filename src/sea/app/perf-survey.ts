@@ -176,12 +176,13 @@ export class PerfSurvey {
   }
 
   /**
-   * Play in real time, one frame per refresh at full resolution with the world live, until `done` or `maxMs`, and
-   * return how the frames went. `counters` is sampled every frame for its peaks (particles, beams).
+   * Play in real time, one frame per refresh at full resolution, until `done` or `maxMs`, and return how the frames
+   * went. `counters` is sampled every frame for its peaks (particles, beams). With `worldLive` false the units only
+   * stand and breathe: what the page's frame pacing is with nothing happening.
    */
-  async sampleLive(maxMs: number, done: () => boolean, counters: () => Record<string, number>): Promise<LiveSample> {
+  async sampleLive(maxMs: number, done: () => boolean, counters: () => Record<string, number>, worldLive = true): Promise<LiveSample> {
     this.running = true;
-    this.worldLive = true;
+    this.worldLive = worldLive;
     this.repeats = 1;
     this.setScale(1);
     const live = { interval: [] as number[], js: [] as number[], sim: [] as number[], peaks: {} as Record<string, number>, counters };

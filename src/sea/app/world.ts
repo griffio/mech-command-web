@@ -316,6 +316,8 @@ export class World {
       // Their pilots are regulars (the mission gives them none).
       world.units.push(await world.spawn(key, 'mech', name, PLAYER_TEAM, x, z, lead?.rotation ?? 0, paint, { stats: key, gunnery: 40 }));
     }
+    // Each type's wreck now, while loading: built at a unit's death, its texture upload stalls the frame.
+    await Promise.all([...new Set(world.units.filter((u) => u.combat).map((u) => u.modelPath))].map((path) => world.wreckModel(path)));
     world.ringModel = await world.sea.models.addModel(selectionRing('selection-ring', [0.35, 1, 0.3, 1]), { scale: 1, unlit: true, gain: 1.4 });
     world.inspectRing = world.sea.models.addInstance(
       await world.sea.models.addModel(selectionRing('inspect-ring', [1, 0.3, 0.2, 1]), { scale: 1, unlit: true, gain: 1.4 }),
@@ -382,17 +384,25 @@ export class World {
     if (this.inspected === unit) this.inspected = null;
   }
 
-  /** Draw a destroyed unit as a burnt-out wreck, keeping its pose. */
-  async makeWreck(unit: SeaUnit): Promise<void> {
-    let model = this.wrecks.get(unit.modelPath);
+  /** The burnt-out look of a model, made once per model. */
+  private wreckModel(path: string): Promise<GpuModel> {
+    let model = this.wrecks.get(path);
     if (!model) {
-      model = this.glb(unit.modelPath).then((data) => this.sea.models.addModel(data, { scale: this.scale, paint: WRECK_PAINT, gain: WRECK_GAIN }));
-      this.wrecks.set(unit.modelPath, model);
+      model = this.glb(path).then((data) => this.sea.models.addModel(data, { scale: this.scale, paint: WRECK_PAINT, gain: WRECK_GAIN }));
+      this.wrecks.set(path, model);
     }
-    const wreck = this.sea.models.addInstance(await model);
-    wreck.matrices.set(unit.instance.matrices);
-    wreck.center.splice(0, 3, ...unit.instance.center);
+    return model;
+  }
+
+  /** Draw a destroyed unit as a burnt-out wreck, keeping its pose (and its matrix slots). */
+  async makeWreck(unit: SeaUnit): Promise<void> {
+    const model = await this.wreckModel(unit.modelPath);
+    const pose = unit.instance.matrices.slice();
+    const center = [...unit.instance.center];
     this.sea.models.removeInstance(unit.instance);
+    const wreck = this.sea.models.addInstance(model);
+    wreck.matrices.set(pose);
+    wreck.center.splice(0, 3, ...center);
     unit.instance = wreck;
   }
 

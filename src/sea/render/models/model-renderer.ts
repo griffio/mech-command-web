@@ -127,6 +127,8 @@ export class ModelRenderer {
   shadowInstances = 0;
 
   private matrixData = new Float32Array(INITIAL_MATRICES * AFFINE_FLOATS);
+  /** Matrix slots of removed instances, for reuse. */
+  private readonly freeSlots: { base: number; count: number }[] = [];
   private matrixCount = 0;
   private matrixBuffer: GPUBuffer;
   private baseData = new Uint32Array(1024);
@@ -263,6 +265,14 @@ export class ModelRenderer {
   }
 
   addInstance(model: GpuModel): ModelInstance {
+    // A removed instance's slots, if one had as many nodes (a unit's wreck takes the unit's own), else new ones.
+    const free = this.freeSlots.findIndex((s) => s.count === model.nodeCount);
+    if (free >= 0) {
+      const { base } = this.freeSlots.splice(free, 1)[0]!;
+      const inst = new ModelInstance(model, base, this.view(base, model.nodeCount));
+      model.instances.push(inst);
+      return inst;
+    }
     const base = this.matrixCount;
     this.matrixCount += model.nodeCount;
     if (this.matrixCount * AFFINE_FLOATS > this.matrixData.length) {
@@ -280,11 +290,13 @@ export class ModelRenderer {
     return inst;
   }
 
-  /** Take an instance off the map (its matrix slots are not reused). */
+  /** Take an instance off the map; its matrix slots go to the next instance added with as many nodes. */
   removeInstance(inst: ModelInstance): void {
     const list = inst.model.instances;
     const i = list.indexOf(inst);
-    if (i >= 0) list.splice(i, 1);
+    if (i < 0) return;
+    list.splice(i, 1);
+    this.freeSlots.push({ base: inst.base, count: inst.model.nodeCount });
   }
 
   /**
