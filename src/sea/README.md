@@ -32,6 +32,8 @@ New:
   face the cut-out material where its texture area actually shows see-through texels, so most of a building stays
   solid. They cast into the sun's shadow map, and the land, the sea and the models receive it. The shadows fade out
   as the camera zooms out (700 to 1000 m), and trees, fences and nets stop casting beyond 45 times their size.
+- `render/fx/`: `particles.ts`/`.wgsl` copied from dreadnought (flashes, sparks, smoke, fire), `beams.ts`/`.wgsl` for
+  laser and PPC fire, and `combat-effects.ts`, the MC2-scale presets built from them.
 - `models/`: a reader for the converter's GLB files and an animator for their clips (no three.js on this page).
 - `app/world.ts`: the mission's placements, units walking as in the three.js viewer, tap picking, the
   selection ring. `app/mc2-map.ts`: MC2 heights in metres and a bilinear upsample. `app/orbit-controls.ts`:

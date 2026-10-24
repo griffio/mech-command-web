@@ -14,6 +14,9 @@ import { OCEAN_LOOP_SECONDS, OceanField, type FoamSettings } from './ocean/ocean
 import { OceanSurface } from './ocean/ocean-surface';
 import { PostProcess } from './post/post';
 import { SCENE_BYTES, SCENE_AMBIENT_BYTE_OFFSET, SCENE_UPLOAD_FLOATS, SLOT, SceneBlock } from './scene-block';
+import { BeamRenderer } from './fx/beams';
+import { CombatEffects } from './fx/combat-effects';
+import { ParticleSystem } from './fx/particles';
 import { ModelRenderer } from './models/model-renderer';
 import { ShadowMap, sunShadowMatrix } from './ships/shadow-map';
 import { Atmosphere } from './sky/atmosphere';
@@ -82,6 +85,7 @@ export interface WakeSource {
 
 /** Switches for measuring what each feature costs (the performance survey flips these). */
 export interface SeaDebugFlags {
+  skipFx: boolean;
   skipProps: boolean;
   skipUnits: boolean;
   skipShadows: boolean;
@@ -116,6 +120,7 @@ export class SeaRenderer {
    */
   shadowFocus: { x: number; z: number; half: number; strength: number } | null = null;
   readonly debug: SeaDebugFlags = {
+    skipFx: false,
     skipProps: false,
     skipUnits: false,
     skipShadows: false,
@@ -148,6 +153,8 @@ export class SeaRenderer {
   private readonly wakeSink: VertexSink;
   private surf: SurfLines | null = null;
   private readonly shadowMatrix = new Float32Array(16);
+  /** Weapon fire, hits, explosions and smoke. */
+  readonly fx: CombatEffects;
 
   private constructor(
     private readonly gpu: GpuContext,
@@ -161,6 +168,8 @@ export class SeaRenderer {
     private readonly land: TerrainRenderer,
     /** MC2's buildings, trees, mechs and vehicles. */
     readonly models: ModelRenderer,
+    private readonly particles: ParticleSystem,
+    private readonly beams: BeamRenderer,
     private readonly shadow: ShadowMap,
     sceneBuffer: GPUBuffer,
     params: SeaParams,
@@ -168,6 +177,8 @@ export class SeaRenderer {
     this.params = params;
     this.sceneBuffer = sceneBuffer;
     this.wakeSink = new VertexSink(wake.staging);
+    this.fx = new CombatEffects(particles, beams);
+    particles.seaHeight = (x, z) => this.waveHeightAt(x, z);
     this.timer = GpuTimer.create(gpu.device);
     const context = canvas.getContext('webgpu');
     if (!context) throw new Error('Could not acquire a webgpu canvas context');
@@ -196,8 +207,12 @@ export class SeaRenderer {
     const wake = await WakeRibbons.create({ device, sceneBuffer, field, ...env, ...targets });
     const land = await TerrainRenderer.create({ device, sceneBuffer, shadow, ...env, ...targets });
     const models = await ModelRenderer.create({ device, sceneBuffer, skyView: atmosphere.skyView, envSampler: atmosphere.envSampler, shadow, ...targets });
+    const particles = await ParticleSystem.create({ device, sceneBuffer, ...env, ...targets });
+    const beams = await BeamRenderer.create({ device, sceneBuffer, ...targets });
     const post = await PostProcess.create(device, gpu.canvasFormat);
-    const renderer = new SeaRenderer(gpu, canvas, quality, atmosphere, field, surface, post, wake, land, models, shadow, sceneBuffer, { ...params });
+    const renderer = new SeaRenderer(gpu, canvas, quality, atmosphere, field, surface, post, wake, land, models, particles, beams, shadow, sceneBuffer, {
+      ...params,
+    });
     renderer.regenerateSea();
     return renderer;
   }
@@ -345,6 +360,13 @@ export class SeaRenderer {
     // Casters within reach of the shadow box: it is tilted along the sun, so things up-sun of it can still throw shade in.
     const reach = shadowOn ? { x: focus.x, z: focus.z, reach: focus.half * 1.45 + 80 } : null;
     this.models.update(camera, reach, !this.debug.skipUnits, !this.debug.skipProps);
+    const drawFx = !this.debug.skipFx;
+    if (drawFx) {
+      this.particles.update(dtSeconds);
+      this.particles.prepare(camera.position[0], camera.position[1], camera.position[2]);
+      this.beams.update(dtSeconds);
+      this.beams.prepare(camera.position[0], camera.position[1], camera.position[2]);
+    }
 
     // The sea's grid is drawn only where the camera can see it.
     const hs = this.estimateHs();
@@ -401,6 +423,10 @@ export class SeaRenderer {
     this.models.draw(pass);
     // Foam is blended over the sea after everything solid, tested against the land's and the models' depth.
     this.wake.draw(pass);
+    if (drawFx) {
+      this.particles.draw(pass);
+      this.beams.draw(pass);
+    }
     pass.end();
 
     this.post.encode(encoder, this.context.getCurrentTexture().createView(), exposure, p.bloom, this.timer, !this.debug.skipBloom);
