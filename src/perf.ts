@@ -232,6 +232,8 @@ export function mountPerfPanel(host: PerfHost) {
   const button = document.getElementById('perf-run') as HTMLButtonElement;
   const statusLine = document.getElementById('perf-status')!;
   const results = document.getElementById('perf-results') as HTMLTableElement;
+  // Reports go to the dev server (vite.config.ts); a published build has none, so there the panel waits for ?perf.
+  if (!import.meta.env.DEV && !new URLSearchParams(location.search).has('perf')) return;
   try {
     labelInput.value = localStorage.getItem('perf-label') ?? '';
   } catch {

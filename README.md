@@ -54,6 +54,19 @@ The 5120² colour map is shipped at `--colormap-size 2560` (about 35 MB of GPU
 memory with mipmaps, against about 140 MB at full size). Model textures are capped at
 `--texture-size 512` and stored as WebP inside the GLBs (`EXT_texture_webp`).
 
+### Publishing
+
+`.github/workflows/pages.yml` builds the site on every push to `master` (or by
+hand from the Actions tab) and deploys it to GitHub Pages. In the repository's
+settings, set **Pages → Build and deployment → Source** to **GitHub Actions**. The
+build fetches and converts the mission with `--upscaled`, as above, and caches
+`vendor/` between runs. It sets the site's base path from the Pages
+configuration (`/mech-command-web/` for a project site; `BASE_PATH` in
+`vite.config.ts`).
+
+The performance panels report to the dev server, so a published build hides
+them; add `?perf` to the URL to run one anyway (it can't send the report).
+
 ## The game (WebGPU)
 
 Controls: drag to pan, right-drag or two fingers to turn and tilt, scroll or
@@ -234,6 +247,7 @@ Microsoft's Shared Source release. The MechCommander 2 art may be used and
 redistributed **for non-commercial purposes only**, and the licence grants no rights
 to Microsoft's trademarks (see `EULA.txt` in the engine repository). That's why
 `vendor/` and `public/assets/` are git-ignored: anyone building this fetches and
-converts the data themselves. The `--upscaled` textures are the remaster author's AI
+converts the data themselves, and so does the Pages workflow. The published site
+serves the converted art, so it must stay non-commercial. The `--upscaled` textures are the remaster author's AI
 upscales of the same art, so the same non-commercial terms apply, as they do to the
 screenshots in `docs/screenshots/`, which show it.

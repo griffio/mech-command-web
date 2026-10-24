@@ -356,6 +356,8 @@ function mountSurveyPanel(context: () => Record<string, unknown>, kinds: SurveyK
   const labelInput = document.getElementById('perf-label') as HTMLInputElement;
   const buttons = kinds.map((k) => document.getElementById(k.button) as HTMLButtonElement);
   const log = document.getElementById('perf-status')!;
+  // Reports go to the dev server (vite.config.ts); a published build has none, so there the panel waits for ?perf.
+  if (!import.meta.env.DEV && !new URLSearchParams(location.search).has('perf')) return;
   try {
     labelInput.value = localStorage.getItem('perf-label') ?? '';
   } catch {

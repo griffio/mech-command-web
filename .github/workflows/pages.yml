@@ -1,0 +1,70 @@
+# Builds the game and publishes it to GitHub Pages (Settings → Pages → Source: GitHub Actions).
+#
+# The MC2 data isn't in the repository (its art is licensed for non-commercial use only), so the build fetches and
+# converts it the way a local checkout does: the mission's files from alariq/mc2srcdata, and the remaster's 4x
+# upscaled textures, cached between runs.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push waits rather than cancelling one in progress.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Cache MC2 source data
+        uses: actions/cache@v6
+        with:
+          path: vendor
+          key: mc2-data-${{ hashFiles('tools/**/*.ts') }}
+          restore-keys: mc2-data-
+
+      - name: Fetch MC2 source data
+        run: npm run fetch-data -- --upscaled
+
+      - name: Convert the mission
+        run: npm run convert -- --upscaled
+
+      - id: pages
+        uses: actions/configure-pages@v6
+
+      - name: Build
+        run: npm run build
+        env:
+          # A project site is served from /<repository>/; the asset and page URLs need that prefix.
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}/
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

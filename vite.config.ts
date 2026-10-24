@@ -105,6 +105,8 @@ export default defineConfig(({ mode }) => ({
   // only exists in secure contexts, so the perf test can only probe it that way
   // from another device on the LAN.
   plugins: [perfReports(), ...(mode === 'https' ? [basicSsl()] : [])],
+  // GitHub Pages serves a project site from /<repository>/ (see .github/workflows/pages.yml).
+  base: process.env.BASE_PATH || '/',
   server: { host: true },
   // Converted game data lives in public/assets, so keep Vite's bundle out of that folder.
   build: {
