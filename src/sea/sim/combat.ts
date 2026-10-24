@@ -89,12 +89,18 @@ export abstract class Combatant {
 
   constructor(
     weapons: { def: WeaponDef; location: MechLocation | null }[],
-    ammo: Record<number, number>,
+    private readonly fullAmmo: Record<number, number>,
     /** The pilot's gunnery: the chance to hit, percent. */
     readonly gunnery: number,
   ) {
     this.weapons = weapons.map((w) => ({ ...w, readyAt: 0, destroyed: false }));
-    for (const [id, rounds] of Object.entries(ammo)) this.ammo.set(Number(id), rounds);
+    this.rearm(0);
+  }
+
+  /** Full ammunition, and every weapon ready at `now`. */
+  rearm(now: number): void {
+    for (const [id, rounds] of Object.entries(this.fullAmmo)) this.ammo.set(Number(id), rounds);
+    for (const w of this.weapons) w.readyAt = now;
   }
 
   get alive(): boolean {

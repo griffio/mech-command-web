@@ -80,6 +80,10 @@ export class BeamRenderer {
     return new BeamRenderer(device, pipeline, sceneGroup);
   }
 
+  get active(): number {
+    return this.beams.length;
+  }
+
   add(beam: BeamDesc): void {
     if (this.beams.length >= MAX_BEAMS) this.beams.shift();
     this.beams.push({ ...beam, age: 0 });

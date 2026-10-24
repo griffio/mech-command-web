@@ -6,7 +6,8 @@
 import '../style.css';
 import { ASSET_ROOT, loadBinary, loadJson, type MapInfo } from '../assets.ts';
 import { OrbitControls } from './app/orbit-controls';
-import { PerfSurvey, type SurveyRow } from './app/perf-survey';
+import { runBattleSurvey } from './app/battle-survey';
+import { PerfSurvey, SEA_STEPS } from './app/perf-survey';
 import { initGpu } from './platform/gpu-device';
 import { CanvasSizer } from './platform/resize';
 import { Camera } from './render/camera';
@@ -126,13 +127,16 @@ async function main() {
     controls.yawDeg = v.yawDeg;
     controls.pitchDeg = v.pitchDeg;
   };
-  const survey = new PerfSurvey(sea, (scale) => (sizer.renderScale = scale), () => sizer.width * sizer.height, [
+  const survey = new PerfSurvey(sea, (scale) => (sizer.renderScale = scale), () => sizer.width * sizer.height);
+  const seaViews = [
     { name: 'opening', apply: view(opening) },
     { name: 'zoomed-out', apply: view({ target: [0, 0, 0], distance: 2300, yawDeg: 0, pitchDeg: 62 }) },
-  ]);
+  ];
   let before: typeof opening | null = null;
-  mountSurveyPanel(survey, () => ({
-    kind: 'sea-survey',
+  const restoreScale = () => {
+    if (fixedScale === null) sizer.renderScale = scaler.scale;
+  };
+  mountSurveyPanel(() => ({
     map: mapName,
     userAgent: navigator.userAgent,
     adapter: { vendor: gpu.adapterInfo.vendor, architecture: gpu.adapterInfo.architecture },
@@ -142,15 +146,28 @@ async function main() {
     land: sea.landStats,
     oceanDrawnFraction: Math.round(sea.oceanArc.drawnFraction * 100) / 100,
     objects: { props: world.propCount, units: world.units.length, drawn: sea.models.drawnInstances, shadowCasters: sea.models.shadowInstances },
-  }), {
-    start: () => {
-      before = { target: [...controls.target], distance: controls.distance, yawDeg: controls.yawDeg, pitchDeg: controls.pitchDeg };
+  }), [
+    {
+      button: 'perf-run',
+      kind: 'sea-survey',
+      intro: "Sea survey: don't touch the screen for about three minutes.",
+      run: async (log) => ({ rows: await survey.run({ views: seaViews, steps: SEA_STEPS }, log) }),
+      start: () => {
+        before = { target: [...controls.target], distance: controls.distance, yawDeg: controls.yawDeg, pitchDeg: controls.pitchDeg };
+      },
+      done: () => {
+        restoreScale();
+        if (before) view(before)();
+      },
     },
-    done: () => {
-      if (fixedScale === null) sizer.renderScale = scaler.scale;
-      if (before) view(before)();
+    {
+      button: 'perf-battle',
+      kind: 'battle-survey',
+      intro: "Battle survey: every unit in one fight. Don't touch the screen for about four minutes.",
+      run: async (log) => ({ ...(await runBattleSurvey(survey, world, sea, (v) => view(v)(), log)) }),
+      done: restoreScale,
     },
-  });
+  ]);
 
   setStatus('');
   let last = performance.now();
@@ -163,8 +180,10 @@ async function main() {
     last = now;
     controls.update();
     camera.update(canvas.clientWidth / Math.max(canvas.clientHeight, 1));
-    world.update(dt, !survey.running);
+    const simStart = performance.now();
+    world.update(dt, !survey.running || survey.worldLive);
     bars.update(world, camera, canvas.clientWidth, canvas.clientHeight);
+    const simMs = performance.now() - simStart;
     // The shadow map covers what the camera looks at, growing in 25% steps as it zooms out (so it doesn't shimmer). The
     // shadows fade out between 700 and 1000 m: from further off a tree's shadow is a pixel or two, and the map's own
     // shadows are baked into its colour map anyway. Past the fade there is no shadow pass at all.
@@ -178,7 +197,7 @@ async function main() {
     const encodeStart = performance.now();
     for (let i = 0; i < repeats; i++) sea.frame(dt / repeats, camera);
     const cpuMs = (performance.now() - encodeStart) / repeats;
-    survey.onFrame(frameMs, cpuMs);
+    survey.onFrame(frameMs, cpuMs, simMs);
     if (fixedScale === null && !survey.running) {
       const next = scaler.sample(frameMs, dt);
       if (next !== null) sizer.renderScale = next;
@@ -307,11 +326,21 @@ function logEvent(text: string, team: number) {
   window.setTimeout(() => line.remove(), 9000);
 }
 
-/** The panel's button runs the survey and POSTs the report to the dev server (see vite.config.ts). */
-function mountSurveyPanel(survey: PerfSurvey, context: () => Record<string, unknown>, hooks: { start(): void; done(): void }) {
+/** A survey the panel can run: its button, the report's kind, and what it measures (fields added to the report). */
+interface SurveyKind {
+  button: string;
+  kind: string;
+  intro: string;
+  run(log: (line: string) => void): Promise<Record<string, unknown>>;
+  start?(): void;
+  done?(): void;
+}
+
+/** The panel's buttons run a survey each and POST the report to the dev server (see vite.config.ts). */
+function mountSurveyPanel(context: () => Record<string, unknown>, kinds: SurveyKind[]) {
   const panel = document.getElementById('perf')!;
   const labelInput = document.getElementById('perf-label') as HTMLInputElement;
-  const button = document.getElementById('perf-run') as HTMLButtonElement;
+  const buttons = kinds.map((k) => document.getElementById(k.button) as HTMLButtonElement);
   const log = document.getElementById('perf-status')!;
   try {
     labelInput.value = localStorage.getItem('perf-label') ?? '';
@@ -319,21 +348,20 @@ function mountSurveyPanel(survey: PerfSurvey, context: () => Record<string, unkn
     // Storage can be unavailable (private browsing); the label just isn't remembered.
   }
   panel.hidden = false;
-  button.addEventListener('click', async () => {
+  kinds.forEach((k, i) => buttons[i]!.addEventListener('click', async () => {
     const label = labelInput.value.trim();
     try {
       localStorage.setItem('perf-label', label);
     } catch {
       // See above.
     }
-    button.disabled = true;
+    for (const b of buttons) b.disabled = true;
     document.body.classList.add('perf-running');
-    log.textContent = "Sea survey: don't touch the screen for about three minutes.\n";
-    hooks.start();
-    let rows: SurveyRow[] = [];
+    log.textContent = k.intro + '\n';
+    k.start?.();
     try {
-      rows = await survey.run((line) => (log.textContent += line + '\n'));
-      const report = { label, createdAt: new Date().toISOString(), ...context(), rows };
+      const result = await k.run((line) => (log.textContent += line + '\n'));
+      const report = { label, createdAt: new Date().toISOString(), kind: k.kind, ...context(), ...result };
       const res = await fetch(`${import.meta.env.BASE_URL}api/perf`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -343,11 +371,11 @@ function mountSurveyPanel(survey: PerfSurvey, context: () => Record<string, unkn
     } catch (err) {
       log.textContent += `Survey failed: ${err instanceof Error ? err.message : err}`;
     } finally {
-      button.disabled = false;
+      for (const b of buttons) b.disabled = false;
       document.body.classList.remove('perf-running');
-      hooks.done();
+      k.done?.();
     }
-  });
+  }));
 }
 
 main().catch((err) => {

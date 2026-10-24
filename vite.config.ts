@@ -55,7 +55,15 @@ function perfReports(): Plugin {
       // The sea page's survey: per-frame GPU cost of each configuration, from each fixed view.
       for (const r of report.rows ?? []) {
         const range = r.costLowMs !== undefined ? `${r.costLowMs.toFixed(2)}-${(r.costHighMs ?? r.costMs).toFixed(2)}` : r.costMs.toFixed(2);
-        console.log(`  ${(r.view ?? '').padEnd(10)} ${r.name.padEnd(30)} ${range.padStart(11)} ms${r.clipped ? '*' : ' '}  (${r.deltaMs >= 0 ? '+' : ''}${r.deltaMs.toFixed(2)})`);
+        console.log(`  ${(r.view ?? '').padEnd(12)} ${r.name.padEnd(30)} ${range.padStart(11)} ms${r.clipped ? '*' : ' '}  (${r.deltaMs >= 0 ? '+' : ''}${r.deltaMs.toFixed(2)})`);
+      }
+      // The battle survey's fight in real time.
+      const live = report.live;
+      if (live) {
+        console.log(
+          `  live fight: ${live.seconds.toFixed(0)} s at ${live.fps.toFixed(1)} fps, refresh p99 ${live.intervalMs.p99.toFixed(1)} ms, ` +
+            `${live.over20} frames over 20 ms, JavaScript p50 ${live.jsMs.p50.toFixed(2)} ms max ${live.jsMs.max.toFixed(1)} ms`,
+        );
       }
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ file: `perf-reports/${name}` }));
@@ -71,6 +79,7 @@ function perfReports(): Plugin {
 interface PerfReportSummary {
   label?: string;
   scenarios?: { name: string; fps: number; frameMs: { p95: number } }[];
+  live?: { seconds: number; fps: number; intervalMs: { p99: number }; over20: number; jsMs: { p50: number; max: number } };
   rows?: { view?: string; name: string; costMs: number; costLowMs?: number; costHighMs?: number; deltaMs: number; clipped: boolean }[];
 }
 

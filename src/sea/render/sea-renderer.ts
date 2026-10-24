@@ -244,6 +244,11 @@ export class SeaRenderer {
     return { ...this.surface.arc, drawnFraction: this.surface.drawnFraction };
   }
 
+  /** Particles and beams alive. */
+  get fxCounts(): { particles: number; beams: number } {
+    return { particles: this.particles.active, beams: this.beams.active };
+  }
+
   /** Smoothed GPU milliseconds per phase, or null when the device has no timestamp queries. */
   get gpuTimes(): GpuTimes | null {
     return this.timer ? this.timer.times : null;
@@ -360,11 +365,12 @@ export class SeaRenderer {
     // Casters within reach of the shadow box: it is tilted along the sun, so things up-sun of it can still throw shade in.
     const reach = shadowOn ? { x: focus.x, z: focus.z, reach: focus.half * 1.45 + 80 } : null;
     this.models.update(camera, reach, !this.debug.skipUnits, !this.debug.skipProps);
+    // Effects age even when they aren't drawn, so they don't pile up meanwhile.
     const drawFx = !this.debug.skipFx;
+    this.particles.update(dtSeconds);
+    this.beams.update(dtSeconds);
     if (drawFx) {
-      this.particles.update(dtSeconds);
       this.particles.prepare(camera.position[0], camera.position[1], camera.position[2]);
-      this.beams.update(dtSeconds);
       this.beams.prepare(camera.position[0], camera.position[1], camera.position[2]);
     }
 

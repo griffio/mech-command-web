@@ -72,6 +72,8 @@ export class Battle {
   outcome: 'won' | 'lost' | null = null;
   /** Things worth telling the player: kills, lost limbs, the outcome. */
   onEvent: (text: string, team: number) => void = () => {};
+  /** Shots land and show, but do no damage (the battle survey's steady fight). */
+  immortal = false;
   private tickIn = 0;
   private frame = 0;
   private routes = 0;
@@ -102,6 +104,22 @@ export class Battle {
     this.land();
     this.fly();
     this.burn();
+  }
+
+  /** Forget shots in flight, routes and the outcome (the battle survey restages the fight). */
+  reset(): void {
+    this.payloads.length = 0;
+    this.missiles.length = 0;
+    this.seen.clear();
+    this.sight.clear();
+    this.nextRoute.clear();
+    this.outcome = null;
+    this.tickIn = 0;
+  }
+
+  /** Shells, missiles and wrecks in play (for the battle survey). */
+  get counts(): { shells: number; missiles: number; wrecks: number } {
+    return { shells: this.payloads.length, missiles: this.missiles.length, wrecks: this.wrecks.length };
   }
 
   /** Does `a` see `b` (as of the last combat tick)? */
@@ -301,7 +319,7 @@ export class Battle {
       if (p.location) this.fx.hit(p.point, p.scale);
       else this.fx.groundHit(p.point, 0.5 * p.scale + 0.3, this.world.terrain.heightAt(p.point[0], p.point[2]) < 0);
     }
-    if (!p.location || !t.alive || !t.combat) return;
+    if (!p.location || !t.alive || !t.combat || this.immortal) return;
     const report = t.combat.takeHit(p.location, p.damage, this.rng);
     if (!t.alive) this.destroyed(t, p.attacker, report);
     else this.wounded(t, report, p.point);
