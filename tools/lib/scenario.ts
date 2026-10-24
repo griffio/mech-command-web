@@ -47,6 +47,21 @@ export interface Scenario {
   transport: string;
   /** Object file of the prop dug-in infantry shelter behind ("sandbagbunker"). */
   garrison: string;
+  logistics?: ScenarioLogistics;
+}
+
+/** Supply trucks and the forward bases they build (all object file names). */
+export interface ScenarioLogistics {
+  /** The supply truck (its RefitPoints are the supply it carries). */
+  truck: string;
+  /** The forward base's headquarters (a tent): destroy it and the base is gone. */
+  hq: string;
+  /** The turret that guards a forward base. */
+  turret: string;
+  /** Sandbags about the base. */
+  wall: string;
+  /** Supply a forward base costs to build. */
+  fobCost: number;
 }
 
 export function readScenarios(map: string, dir = 'scenarios'): Scenario[] {
@@ -67,6 +82,12 @@ export function scenarioNeeds(scenarios: Scenario[]): { units: string[]; props: 
   for (const s of scenarios) {
     if (s.transport) appearances.add(s.transport.toLowerCase());
     if (s.garrison) props.add(s.garrison.toLowerCase());
+    if (s.logistics) {
+      units.add(s.logistics.truck.toLowerCase());
+      units.add(s.logistics.turret.toLowerCase());
+      props.add(s.logistics.hq.toLowerCase());
+      props.add(s.logistics.wall.toLowerCase());
+    }
     for (const side of s.sides) {
       props.add(side.flag.toLowerCase());
       for (const squad of side.squads) for (const u of squad.units) units.add(u.toLowerCase());

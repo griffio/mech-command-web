@@ -313,10 +313,15 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World) {
     const hit = pickAt(e.clientX, e.clientY);
     if (!hit) return;
     if (Array.isArray(hit)) {
-      // With Airlift pressed, the tap is where the Karnov drops the selected infantry.
+      // With Airlift pressed, the tap is where the Karnov drops the selected infantry; with Build FOB, where the
+      // selected truck builds a forward base.
       if (airlift.getAttribute('aria-pressed') === 'true') {
         world.orderAirlift(hit[0], hit[1]);
         airlift.setAttribute('aria-pressed', 'false');
+      } else if (build.getAttribute('aria-pressed') === 'true') {
+        const why = world.orderBuildFob(hit[0], hit[1]);
+        if (why) logEvent(`Can't build a forward base there: ${why}`, PLAYER_TEAM);
+        build.setAttribute('aria-pressed', 'false');
       } else world.orderMove(hit[0], hit[1]);
     } else world.tapUnit(hit, e.shiftKey);
   };
@@ -325,14 +330,24 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World) {
 
   const run = document.getElementById('cmd-run') as HTMLButtonElement;
   const airlift = document.getElementById('cmd-airlift') as HTMLButtonElement;
-  airlift.addEventListener('click', () => airlift.setAttribute('aria-pressed', String(airlift.getAttribute('aria-pressed') !== 'true')));
-  // Airlift is offered while the selection has infantry and the scenario has a Karnov.
-  const offerAirlift = () => {
-    const on = !!world.match?.airlift.available && [...world.selectedSquads].some((q) => q.isInfantry && !q.airborne);
-    if (airlift.hidden === on) airlift.hidden = !on;
-    if (!on) airlift.setAttribute('aria-pressed', 'false');
+  const build = document.getElementById('cmd-build') as HTMLButtonElement;
+  // Each is a mode for the next tap on the ground; pressing one lets go of the other.
+  for (const [button, other] of [[airlift, build], [build, airlift]] as const) {
+    button.addEventListener('click', () => {
+      button.setAttribute('aria-pressed', String(button.getAttribute('aria-pressed') !== 'true'));
+      other.setAttribute('aria-pressed', 'false');
+    });
+  }
+  // Airlift is offered while the selection has something the Karnov can carry; Build FOB while it has a supply truck.
+  const offer = (button: HTMLButtonElement, on: boolean) => {
+    if (button.hidden === on) button.hidden = !on;
+    if (!on) button.setAttribute('aria-pressed', 'false');
   };
-  window.setInterval(offerAirlift, 250);
+  window.setInterval(() => {
+    const squads = [...world.selectedSquads];
+    offer(airlift, !!world.match?.airlift.available && squads.some((q) => q.airliftable && !q.airborne));
+    offer(build, !!world.match?.logistics && squads.some((q) => q.isLogistics && !q.airborne));
+  }, 250);
   document.getElementById('cmd-all')!.addEventListener('click', () => world.selectAll());
   document.getElementById('cmd-stop')!.addEventListener('click', () => world.stopSelected());
   run.addEventListener('click', () => {
@@ -347,6 +362,8 @@ function describeSelection(world: World): string {
   if (u) {
     const who = `${u.team === PLAYER_TEAM ? '' : 'Enemy '}${u.name} (${u.squad ? `squad ${u.squad.name}, ` : ''}${u.kind})`;
     if (!u.alive) return `${who}: destroyed, ${u.combat?.dead ?? ''}`;
+    const fob = world.match?.logistics?.fobs.find((f) => f.hq === u);
+    if (fob) return `${u.team === PLAYER_TEAM ? '' : 'Enemy '}forward base · ${percent(u)} · supply ${Math.floor(fob.supply)}`;
     const attackers = [...world.selected].filter((s) => s.attackOrder === u).length;
     return `${who} · ${percent(u)}${attackers ? ` · ${attackers} of yours attacking` : ''}`;
   }
@@ -371,7 +388,9 @@ function describeSelection(world: World): string {
 function describeUnit(world: World, u: SeaUnit): string {
   const c = u.combat;
   if (!c) return u.name;
-  const parts = [`${u.name} ${percent(u)}`, `${c.weapons.filter((w) => !w.destroyed).length}/${c.weapons.length} weapons`];
+  const parts = [`${u.name} ${percent(u)}`];
+  if (c.weapons.length) parts.push(`${c.weapons.filter((w) => !w.destroyed).length}/${c.weapons.length} weapons`);
+  if (u.supply !== null) parts.push(`supply ${Math.floor(u.supply)}`);
   const ammo = [...c.ammo].map(([id, rounds]) => `${world.ammoName(id)} ${Math.floor(rounds)}`).join(', ');
   if (ammo) parts.push(ammo);
   if (u.target) parts.push(`${u.attackOrder ? 'attacking' : 'firing at'} ${u.target.name}, ${Math.round(Math.hypot(u.target.x - u.x, u.target.z - u.z))} m`);

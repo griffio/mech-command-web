@@ -67,6 +67,8 @@ export interface VehicleStats {
   speed: number;
   /** A hovercraft crosses water, deep or shallow ([General] HoverCraft). */
   hover: boolean;
+  /** Refit points it carries (a repair truck's 500): the supply a truck brings. */
+  refitPoints: number;
   /** How far the turret turns either way, degrees (0: the hull must face the target). */
   turretYaw: number;
   armor: Record<VehicleLocation, number>;
@@ -226,6 +228,7 @@ export function readVehicleStats(fit: Fit, components: ComponentTable): VehicleS
     tonnage: fit.num('General', 'CurTonnage'),
     speed: fit.num('VehicleDynamics', 'MaxVelocity'),
     hover: fit.bool('General', 'HoverCraft'),
+    refitPoints: Math.max(0, fit.num('General', 'RefitPoints')),
     turretYaw: fit.num('VehicleDynamics', 'MaxTurretYaw'),
     armor: Object.fromEntries(sections.map(([k, s]) => [k, fit.num(s, 'MaxArmorPoints')])) as Record<VehicleLocation, number>,
     structure: Object.fromEntries(sections.map(([k, s]) => [k, fit.num(s, 'CurInternalStructure', fit.num('InternalStructure', s, 1))])) as Record<
@@ -234,6 +237,39 @@ export function readVehicleStats(fit: Fit, components: ComponentTable): VehicleS
     >,
     weapons,
     ammo,
+  };
+}
+
+/**
+ * A turret's object file ([TurretData]): its damage level as structure on every side (no armour), its weapons
+ * (WeaponType, WeaponType1, ...) with ammunition that never runs out, and its gunner's skill.
+ */
+export function readTurretStats(fit: Fit, components: ComponentTable): { stats: VehicleStats; gunnery: number } {
+  const hp = fit.num('TurretData', 'DmgLevel', 20);
+  const sides: VehicleLocation[] = ['front', 'left', 'right', 'rear', 'turret'];
+  const weapons: VehicleStats['weapons'] = [];
+  const ammo: Record<number, number> = {};
+  for (const key of ['WeaponType', 'WeaponType1', 'WeaponType2', 'WeaponType3']) {
+    const id = fit.num('TurretData', key, -1);
+    const w = components.weapons.get(id);
+    if (!w) continue;
+    weapons.push({ id });
+    if (w.ammo !== null) ammo[w.ammo] = 1e6;
+  }
+  return {
+    stats: {
+      name: fit.str('ObjectType', 'Name'),
+      tonnage: fit.num('TurretData', 'Tonnage'),
+      speed: 0,
+      hover: false,
+      refitPoints: 0,
+      turretYaw: 360,
+      armor: Object.fromEntries(sides.map((s) => [s, 0])) as Record<VehicleLocation, number>,
+      structure: Object.fromEntries(sides.map((s) => [s, hp])) as Record<VehicleLocation, number>,
+      weapons,
+      ammo,
+    },
+    gunnery: fit.num('TurretData', 'PilotSkill', 50),
   };
 }
 

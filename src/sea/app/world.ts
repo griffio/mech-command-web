@@ -19,6 +19,7 @@ import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import type { SeaRenderer } from '../render/sea-renderer';
 import { parseGlb, type ModelData } from '../models/glb';
 import { AFFINE_FLOATS, Animator, mulAffine, placement, restPose } from '../models/pose';
+import type { VehicleStats } from '../../assets.ts';
 import { MechCombat, VehicleCombat } from '../sim/combat';
 import { MoveGrid, type MoveClass } from '../sim/move-grid';
 import type { Terrain } from '../sim/terrain/terrain';
@@ -43,9 +44,17 @@ const INFANTRY_SCALE = 1.8;
 /** Metres between squads side by side when several are sent to one place. */
 const SQUAD_SPACING = 40;
 /** Names for unit types whose object files name them poorly. */
-const TYPE_NAMES: Record<string, string> = { infantry: 'Trooper', poweredarmor: 'Elemental', lrmcarrier: 'LRM Carrier', harasser: 'Harasser' };
+const TYPE_NAMES: Record<string, string> = {
+  infantry: 'Trooper',
+  poweredarmor: 'Elemental',
+  lrmcarrier: 'LRM Carrier',
+  harasser: 'Harasser',
+  repairtruck: 'Supply truck',
+  mediumautocannonturret: 'Autocannon turret',
+};
 
-export type UnitKind = 'mech' | 'vehicle' | 'infantry';
+/** A structure (a turret, a forward base's tent) stays where it's put. */
+export type UnitKind = 'mech' | 'vehicle' | 'infantry' | 'structure';
 
 /** Paint for burnt-out wrecks: every team colour goes to soot. */
 const WRECK_PAINT: PaintScheme = { red: '#2b2724', green: '#2b2724', blue: '#2b2724' };
@@ -90,6 +99,9 @@ export class SeaUnit {
   altitude = 0;
   /** Aboard a transport: out of the fight, not drawn; it rides at the transport's position. */
   embarked = false;
+  /** A supply truck's load, and how much it holds (null for anything else). */
+  supply: number | null = null;
+  supplyCapacity: number | null = null;
   /** A soldier's body is gone when he dies (there's no wreck to leave). */
   private gone = false;
   instance: ModelInstance;
@@ -132,7 +144,7 @@ export class SeaUnit {
 
   /** A unit the player can give orders to. */
   get commandable(): boolean {
-    return this.team === PLAYER_TEAM && this.combat !== null && this.alive;
+    return this.team === PLAYER_TEAM && this.combat !== null && this.alive && this.kind !== 'structure';
   }
 
   /** How it gets about: a mech wades the shallows, a hovercraft crosses water, the rest keep to land and fords. */
@@ -226,6 +238,7 @@ export class SeaUnit {
   /** Speed from the gesture data (MC2 gives it in metres a second already); vehicles all move alike; infantry at theirs. */
   get speed(): number {
     const stats = this.combat?.stats;
+    if (this.kind === 'structure') return 0;
     if (this.kind === 'infantry') return stats && 'speed' in stats ? stats.speed : 5;
     if (this.kind === 'vehicle') return VEHICLE_SPEED;
     return this.info?.clips[this.running ? 'run' : 'walk']?.startVelocity ?? 10;
@@ -290,8 +303,8 @@ export class SeaUnit {
     const diff = ((desired - this.rotation + 540) % 360) - 180;
     this.rotation = (this.rotation + Math.sign(diff) * Math.min(Math.abs(diff), TURN_RATE * dt) + 360) % 360;
     this.turning = false;
-    // Infantry move at a run (their top speed is a running pace).
-    this.play(this.running || this.kind === 'infantry' ? 'run' : 'walk');
+    // Infantry move at a run (their top speed is a running pace); vehicles' clips aren't for driving.
+    if (this.kind === 'mech' || this.kind === 'infantry') this.play(this.running || this.kind === 'infantry' ? 'run' : 'walk');
     // Turn in place first when the next waypoint is well off to the side.
     if (Math.abs(diff) < 30) {
       const step = Math.min(distance, this.speed * dt);
@@ -458,6 +471,8 @@ export class World {
     paint: PaintScheme;
     stats: string | null;
     gunnery: number;
+    /** Stats of its own, for something no object file describes (a forward base's tent). */
+    custom?: VehicleStats;
   }): Promise<SeaUnit> {
     const data = await this.glb(o.model);
     const scale = this.scale * (o.kind === 'infantry' ? INFANTRY_SCALE : 1);
@@ -477,7 +492,8 @@ export class World {
       nodes: new Map(data.nodes.map((n, i) => [n.name, i])),
       modelPath: o.model,
     };
-    const unit = new SeaUnit(o.name, o.kind, o.team, body, this.combatant(o.kind, o.stats, o.gunnery), o.x, o.z, o.rotation);
+    const combat = o.custom ? new VehicleCombat(o.custom, this.combatFile.weapons, o.gunnery) : this.combatant(o.kind, o.stats, o.gunnery);
+    const unit = new SeaUnit(o.name, o.kind, o.team, body, combat, o.x, o.z, o.rotation);
     if (animator) {
       animator.play('idle', 0, Math.random() * 3); // out of step, so a lance does not breathe in unison
     }
@@ -500,10 +516,20 @@ export class World {
       rotation,
       paint,
       stats: t.stats,
-      gunnery,
+      gunnery: t.gunnery ?? gunnery,
     });
     unit.typeKey = type;
+    // A truck that carries refit points carries them as supply, full to begin with.
+    const refit = t.stats ? (this.combatFile.vehicles[t.stats]?.refitPoints ?? 0) : 0;
+    if (t.kind === 'vehicle' && refit > 0) unit.supply = unit.supplyCapacity = refit;
     return unit;
+  }
+
+  /** A scenario type's weight, tons. */
+  typeTonnage(type: string): number {
+    const t = this.unitsFile.types?.[type];
+    if (!t?.stats) return 0;
+    return (t.kind === 'mech' ? this.combatFile.mechs[t.stats]?.tonnage : this.combatFile.vehicles[t.stats]?.tonnage) ?? 0;
   }
 
   typeKind(type: string): UnitKind {
@@ -538,12 +564,15 @@ export class World {
     return model;
   }
 
-  /** Stand a marker on the ground: a ring `scale` metres in radius, or a prop at its own size (scale omitted). */
-  addMarker(model: GpuModel, x: number, z: number, scale = this.scale): ModelInstance {
+  /**
+   * Stand a marker on the ground: a ring `scale` metres in radius, or a prop at its own size (scale omitted), turned
+   * `rotation` degrees.
+   */
+  addMarker(model: GpuModel, x: number, z: number, scale = this.scale, rotation = 0): ModelInstance {
     const inst = this.sea.models.addInstance(model);
     const y = this.terrain.heightAt(x, z);
     const frame = new Float32Array(AFFINE_FLOATS);
-    placement(frame, x, Math.max(y, 0) + 0.3, z, 0, scale);
+    placement(frame, x, Math.max(y, 0) + 0.3, z, (rotation * Math.PI) / 180, scale);
     const rest = this.markerRest.get(model);
     for (let k = 0; k < model.nodeCount; k++) {
       if (rest) mulAffine(inst.matrices, k * AFFINE_FLOATS, frame, 0, rest, k * AFFINE_FLOATS);
@@ -607,6 +636,11 @@ export class World {
   unitDied(unit: SeaUnit): void {
     this.selected.delete(unit);
     if (this.inspected === unit) this.inspected = null;
+  }
+
+  /** Make a model's wreck ahead of time (built when a unit dies, its texture upload would stall the frame). */
+  async prepareWreck(path: string): Promise<void> {
+    await this.wreckModel(path);
   }
 
   /** The burnt-out look of a model, made once per model. */
@@ -728,6 +762,15 @@ export class World {
     return routed;
   }
 
+  /** Send the selected logistics squads to build a forward base at a point; the reason, if one can't. */
+  orderBuildFob(x: number, z: number): string | null {
+    const logistics = this.match?.logistics;
+    if (!logistics) return 'no logistics in this scenario';
+    let why: string | null = 'select a logistics squad first';
+    for (const q of this.selectedSquads) if (q.isLogistics) why = logistics.orderBuild(q, x, z);
+    return why;
+  }
+
   /** Airlift the selected infantry squads to a point (the rest of the selection goes there on its own feet). */
   orderAirlift(x: number, z: number): number {
     return this.orderSquadsMove(x, z, true);
@@ -755,7 +798,7 @@ export class World {
       const [tx, tz] = [x + px * o, z + pz * o];
       const c = q.centroid()!;
       const walkable = this.grids?.ground.connected(c[0], c[1], tx, tz) ?? true;
-      if (q.isInfantry && (airlift || !walkable) && this.match?.airliftSquad(q, tx, tz)) return;
+      if (q.airliftable && (airlift || !walkable) && this.match?.airliftSquad(q, tx, tz)) return;
       q.move(this, tx, tz);
     });
     return squads.length;

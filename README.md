@@ -114,6 +114,17 @@ AI commander.
 - **Digging in.** Infantry that stand still for 8 seconds dig in behind
   sandbags (MC2's sandbag bunker) and are much harder to hit until they move:
   mechs take ground fast, infantry are flown in to hold it.
+- **Forward bases.** Each side has a logistics squad: MC2's repair truck,
+  carrying its 500 refit points as supply. Select it, press **Build FOB** and
+  tap a spot: it drives there and spends 300 supply raising MC2's HQ tent behind
+  sandbags, guarded by an autocannon turret (two AC10s, its own gunner). A forward
+  base must be 300 m from your main base and other forward bases. Wiped-out
+  squads come back at the one nearest the front, squads there reinforce and
+  refit, and the Karnov flies from it; all of that costs its supply (a mech its
+  weight twice over, a soldier 10). A truck standing at the main base fills up;
+  one standing at a forward base unloads into it. Destroy the tent and the base
+  is gone (10 tickets). The AI builds a forward base back from the point it's
+  attacking and keeps it supplied.
 
 The AI sends most of its squads at the point it can take next, holds the
 one it must keep with the rest, stands its LRM carriers off behind the attack,

@@ -8,12 +8,14 @@
 // and every point lost; a side loses when its tickets run out, or when the other side holds every point.
 //
 // Infantry are slow and keep to land: a Karnov airlifts them (airlift.ts). Infantry that stand still a while dig in
-// behind sandbags, and are much harder to hit.
+// behind sandbags, and are much harder to hit. Supply trucks build forward bases where squads come back, reinforce and
+// refit nearer the front (logistics.ts).
 import type { Scenario, ScenarioSide } from '../../assets';
 import { PLAYER_PAINT, paintFromMission, type PaintScheme } from '../../paint.ts';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import { bestRange } from '../sim/combat';
 import { Airlift } from './airlift';
+import { FOB_RADIUS, Logistics, type ServicePoint } from './logistics';
 import { Squad } from './squads';
 import { PLAYER_TEAM, bearing, type SeaUnit, type World } from './world';
 
@@ -77,6 +79,8 @@ export class Match {
   /** AI commanders, by team (the player's side has none, unless a test adds one). */
   readonly commanders = new Map<number, CommanderAI>();
   readonly airlift: Airlift;
+  /** Supply trucks and forward bases, when the scenario has them. */
+  logistics: Logistics | null = null;
   /** The sandbags dug-in squads shelter behind (null if the converter didn't export them). */
   private garrisonModel: GpuModel | null = null;
   private readonly sandbags = new Map<Squad, ModelInstance>();
@@ -120,6 +124,10 @@ export class Match {
     }
     for (const side of match.sides) match.flagModels.set(side.team, await world.propModel(side.spec.flag));
     if (scenario.garrison) match.garrisonModel = await world.propModel(scenario.garrison);
+    if (scenario.logistics) {
+      match.logistics = new Logistics(world, match, scenario.logistics, BASE_RADIUS);
+      await match.logistics.load();
+    }
     for (const p of match.points) {
       match.pointRings.push(world.addMarker(match.ringModels.get(`${match.pointRings.length}:none`)!, p.x, p.z, 1));
       match.pointFlags.push(null);
@@ -163,6 +171,7 @@ export class Match {
     if (this.winner !== null) return;
     this.time += dt;
     this.airlift.update(dt);
+    this.logistics?.update(dt);
     this.capture(dt);
     this.garrison(dt);
     this.supply(dt);
@@ -216,9 +225,12 @@ export class Match {
 
   /** Fly a squad of infantry to a point, if the airlift can; false if it can't (it has no Karnov, or is flying). */
   airliftSquad(squad: Squad, x: number, z: number): boolean {
-    if (!squad.isInfantry || !this.airlift.available || squad.airborne) return false;
+    if (!squad.airliftable || !this.airlift.available || squad.airborne) return false;
     const side = this.side(squad.team);
-    void this.airlift.request(squad, side.base, side.paint, x, z);
+    // The Karnov flies from whichever of the side's bases is nearest the squad.
+    const at = squad.centroid()!;
+    const from = this.logistics?.departure(side.team, at[0], at[1]) ?? side.base;
+    void this.airlift.request(squad, from, side.paint, x, z);
     if (squad.team === PLAYER_TEAM) this.onEvent(`${squad.name}: the Karnov is on its way`, squad.team);
     return true;
   }
@@ -243,7 +255,11 @@ export class Match {
     }
   }
 
-  /** Wiped-out squads come back after a while; squads at their base get their missing members back and refit. */
+  /**
+   * Wiped-out squads come back after a while, at the forward base nearest the front that can pay for them (else the
+   * main base). Squads at a base get their missing members back and refit: free at the main base, for supply at a
+   * forward one.
+   */
   private supply(dt: number): void {
     for (const side of this.sides) {
       side.squads.forEach((squad, i) => {
@@ -253,36 +269,61 @@ export class Match {
             squad.respawnAt = this.time + (squad.spec.units.some((t) => this.world.typeKind(t) === 'mech') ? RESPAWN_S.mech : RESPAWN_S.other);
           } else if (this.time >= squad.respawnAt) {
             squad.respawnAt = null;
-            void this.deploy(side, squad, i);
-            this.onEvent(`${side.name}: squad ${squad.name} back at base`, side.team);
+            const point = this.respawnPoint(side, squad);
+            void this.deploy(side, squad, i, Infinity, point);
+            this.onEvent(`${side.name}: squad ${squad.name} back at ${point.fob ? 'a forward base' : 'base'}`, side.team);
           }
           return;
         }
-        const atBase = alive.length > 0 && alive.every((u) => Math.hypot(u.x - side.base.x, u.z - side.base.z) <= BASE_RADIUS);
-        if (!atBase) return;
-        for (const u of alive) u.combat?.refit(dt, REFIT_RATE);
+        const point = this.logistics?.pointFor(side.team, alive) ?? (alive.every((u) => Math.hypot(u.x - side.base.x, u.z - side.base.z) <= BASE_RADIUS) ? this.mainBase(side) : null);
+        if (!point || alive.some((u) => u.embarked)) return;
+        if (!point.fob || this.logistics!.pay(point, this.logistics!.refitCost(alive) * dt)) for (const u of alive) u.combat?.refit(dt, REFIT_RATE);
         if (squad.missing > 0 && this.time >= squad.reinforceAt && this.spawning === 0) {
-          squad.reinforceAt = this.time + REINFORCE_S;
-          void this.deploy(side, squad, i, 1);
+          const next = this.missingTypes(squad)[0]!;
+          if (!this.logistics || this.logistics.pay(point, this.logistics.costOf(next))) {
+            squad.reinforceAt = this.time + REINFORCE_S;
+            void this.deploy(side, squad, i, 1, point);
+          }
         }
       });
     }
   }
 
-  /** Spawn a squad's missing members (or `limit` of them) at its side's base, in its formation's place. */
-  private async deploy(side: Side, squad: Squad, index: number, limit = Infinity): Promise<void> {
+  private mainBase(side: Side): ServicePoint {
+    return { x: side.base.x, z: side.base.z, radius: BASE_RADIUS, fob: null };
+  }
+
+  /** Where a wiped-out squad comes back, paid for: trucks always at the main base (to fill up). */
+  private respawnPoint(side: Side, squad: Squad): ServicePoint {
+    const L = this.logistics;
+    if (!L || squad.spec.units.every((t) => t === L.spec.truck)) return this.mainBase(side);
+    const cost = squad.spec.units.reduce((s, t) => s + L.costOf(t), 0);
+    const point = L.respawnPoint(side.team, cost);
+    L.pay(point, cost);
+    return point;
+  }
+
+  /** The unit types a squad is missing. */
+  private missingTypes(squad: Squad): string[] {
     const types = squad.spec.units.slice();
     for (const u of squad.alive) {
       const k = types.indexOf(u.typeKey ?? '');
       if (k >= 0) types.splice(k, 1);
     }
+    return types;
+  }
+
+  /** Spawn a squad's missing members (or `limit` of them) at a base, in its formation's place. */
+  private async deploy(side: Side, squad: Squad, index: number, limit = Infinity, at: ServicePoint = this.mainBase(side)): Promise<void> {
+    const types = this.missingTypes(squad);
     const toward = this.points[side.team === 0 ? 0 : this.points.length - 1]!;
-    const facing = bearing(side.base, toward);
-    // Squads stand side by side across the base, facing the lane.
+    const facing = bearing(at, toward);
+    // Squads stand side by side across the main base, facing the lane; at a forward base, about its tent.
     const across = ((facing + 90) * Math.PI) / 180;
-    const offset = (index - (side.squads.length - 1) / 2) * 34;
-    const cx = side.base.x + Math.sin(across) * offset;
-    const cz = side.base.z + Math.cos(across) * offset;
+    const offset = at.fob ? (index % 3 - 1) * 20 : (index - (side.squads.length - 1) / 2) * 34;
+    const back = at.fob ? FOB_RADIUS * 0.5 : 0;
+    const cx = at.x + Math.sin(across) * offset - Math.sin((facing * Math.PI) / 180) * back;
+    const cz = at.z + Math.cos(across) * offset - Math.cos((facing * Math.PI) / 180) * back;
     this.spawning++;
     try {
       for (const [k, type] of types.slice(0, limit).entries()) {
@@ -351,6 +392,8 @@ export class Match {
 /** What losing a unit costs its side: a mech by its weight, power armour two, a soldier or a vehicle less. */
 function ticketCost(u: SeaUnit): number {
   const stats = u.combat?.stats;
+  // A forward base's loss is charged when its tent falls (logistics.ts); a turret costs nothing.
+  if (u.kind === 'structure') return 0;
   if (u.kind === 'mech') return Math.max(4, Math.round((stats?.tonnage ?? 40) / 10));
   if (u.kind === 'infantry') return (stats?.tonnage ?? 1) > 2 ? 2 : 1;
   return 3;
@@ -376,7 +419,9 @@ export class CommanderAI {
     const side = this.match.side(this.team);
     const target = this.match.capturable(this.team);
     const hold = this.match.frontier(this.team);
-    const squads = side.squads.filter((q) => q.alive.length && q.respawnAt === null);
+    const ready = side.squads.filter((q) => q.alive.length && q.respawnAt === null);
+    for (const q of ready.filter((q) => q.isLogistics)) this.supplyRun(q);
+    const squads = ready.filter((q) => !q.isLogistics);
     const attackers = Math.ceil(squads.length * 0.65);
     squads
       .sort((a, b) => b.strength - a.strength)
@@ -395,6 +440,34 @@ export class CommanderAI {
         const z = p.z + ((side.base.z - p.z) / d) * standOff;
         this.send(squad, index, x, z, false);
       });
+  }
+
+  /**
+   * The supply truck: build a forward base a little back from the point under attack (if it has the supply and none is
+   * near there), fill up at the main base when it's run low, and otherwise unload at the forward base that needs it most.
+   */
+  private supplyRun(squad: Squad): void {
+    const L = this.match.logistics;
+    const truck = squad.alive[0];
+    if (!L || !truck || truck.supply === null || squad.airborne || L.ordered(squad)) return;
+    const side = this.match.side(this.team);
+    const own = L.fobs.filter((f) => f.team === this.team);
+    const target = this.match.capturable(this.team);
+    const idle = !truck.route.length;
+    if (target !== null && truck.supply >= L.spec.fobCost) {
+      const p = this.match.points[target]!;
+      const d = Math.hypot(side.base.x - p.x, side.base.z - p.z) || 1;
+      const [sx, sz] = this.world.openNear(p.x + ((side.base.x - p.x) / d) * 220, p.z + ((side.base.z - p.z) / d) * 220, 'ground');
+      if (!own.some((f) => Math.hypot(f.x - sx, f.z - sz) < 400) && !L.whyNot(this.team, sx, sz)) {
+        if (!this.world.grids?.ground.connected(truck.x, truck.z, sx, sz)) this.match.airliftSquad(squad, sx, sz);
+        else L.orderBuild(squad, sx, sz);
+        return;
+      }
+    }
+    const goal = truck.supply < 100 ? side.base : own.filter((f) => f.supply < 1000).sort((a, b) => a.supply - b.supply)[0];
+    if (!goal || !idle || Math.hypot(truck.x - goal.x, truck.z - goal.z) < 20) return;
+    if (!this.world.grids?.ground.connected(truck.x, truck.z, goal.x, goal.z)) this.match.airliftSquad(squad, goal.x, goal.z);
+    else squad.move(this.world, goal.x, goal.z);
   }
 
   /**

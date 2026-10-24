@@ -28,6 +28,19 @@ export class Squad {
   /** Infantry that have stood still long enough are dug in (harder to hit, behind sandbags). */
   dugIn = false;
   stillFor = 0;
+  /** What a logistics squad's truck is busy with (building, unloading, filling up), for the HUD. */
+  task: string | null = null;
+
+  /** Its truck carries supply. */
+  get isLogistics(): boolean {
+    const alive = this.alive;
+    return alive.length > 0 && alive.every((u) => u.supply !== null);
+  }
+
+  /** The Karnov can carry it: infantry, or a supply truck on its cargo arm. */
+  get airliftable(): boolean {
+    return this.isInfantry || this.isLogistics;
+  }
 
   /** Everyone left in it is on foot (it can dig in, and be airlifted). */
   get isInfantry(): boolean {
@@ -83,6 +96,10 @@ export class Squad {
     if (this.respawnAt !== null) return `back in ${Math.max(0, Math.ceil(this.respawnAt - now))} s`;
     const alive = this.alive;
     if (this.airborne) return alive.some((u) => u.embarked) ? 'airlifted' : 'awaiting the Karnov';
+    if (this.isLogistics) {
+      const supply = `supply ${Math.floor(alive[0]!.supply ?? 0)}`;
+      return this.task ? `${this.task} · ${supply}` : alive.some((u) => u.route.length) ? `moving · ${supply}` : supply;
+    }
     if (this.dugIn) return alive.some((u) => u.target && u.target.alive) ? 'dug in, fighting' : 'dug in';
     if (alive.some((u) => u.target && u.combat && u.target.alive)) return 'fighting';
     if (this.order.kind === 'retreat') return 'falling back';

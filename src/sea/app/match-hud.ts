@@ -28,6 +28,8 @@ export class MatchHud {
   ) {
     bar.hidden = false;
     squads.hidden = false;
+    // The HUD text sits above the cards, however many rows they wrap to.
+    new ResizeObserver(() => document.body.style.setProperty('--cards-height', `${squads.offsetHeight}px`)).observe(squads);
     const own = match.side(PLAYER_TEAM);
     const enemy = match.sides.find((s) => s.team !== PLAYER_TEAM)!;
     this.ownTickets = tickets(bar, own.name, 'own');

@@ -85,6 +85,14 @@
             "poweredarmor"
           ],
           "gunnery": 50
+        },
+        {
+          "name": "Echo",
+          "role": "Logistics",
+          "units": [
+            "repairtruck"
+          ],
+          "gunnery": 30
         }
       ]
     },
@@ -166,8 +174,23 @@
             "poweredarmor"
           ],
           "gunnery": 42
+        },
+        {
+          "name": "Ox",
+          "role": "Logistics",
+          "units": [
+            "repairtruck"
+          ],
+          "gunnery": 30
         }
       ]
     }
-  ]
+  ],
+  "logistics": {
+    "truck": "repairtruck",
+    "hq": "hqtent",
+    "turret": "mediumautocannonturret",
+    "wall": "sandbagwall",
+    "fobCost": 300
+  }
 }

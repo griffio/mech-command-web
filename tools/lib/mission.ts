@@ -191,10 +191,15 @@ export function readObjectInfo(src: SourceData, list: string[], typeNumber: numb
 }
 
 /**
- * Clip names for a ground vehicle's animations, by `[Animation:N]` index: stand, walk and run for infantry; the Karnov
- * VTOL's are hover, land and take off (tgl/karnov.ini).
+ * Clip names for a ground vehicle's animations, by `[Animation:N]` index: stand, walk and run (infantry), and deploy (the
+ * repair truck opening up); the Karnov VTOL's are hover, land and take off (tgl/karnov.ini).
  */
-const VEHICLE_CLIPS = ['idle', 'walk', 'run'];
+const VEHICLE_CLIPS = ['idle', 'walk', 'run', 'deploy'];
+
+/** Infantry walk on a walk clip of their own (a vehicle's "walk" is its still model). */
+export function walks(spec: ModelSpec): boolean {
+  return spec.clips.some((c) => c.clip === 'walk' && c.file !== spec.base);
+}
 const KARNOV_CLIPS = ['hover', 'land', 'takeoff'];
 
 export interface ModelSpec {

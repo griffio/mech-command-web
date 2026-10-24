@@ -224,6 +224,7 @@ export class Battle {
    * were given) and fire at what comes into range.
    */
   private close(u: SeaUnit): void {
+    if (u.kind === 'structure') return; // turrets and tents stay put
     const t = u.target;
     const leashed = !u.leash || !t || Math.hypot(t.x - u.leash.x, t.z - u.leash.z) <= LEASH_M;
     const hunting = u.attackOrder !== null || (u.team !== PLAYER_TEAM && leashed);

@@ -20,13 +20,14 @@ import { parseAse } from './lib/ase.ts';
 import type { Fit } from './lib/fit.ts';
 import {
   ObjectClass,
+  walks,
   WORLD_UNITS_PER_METER,
   WORLD_UNITS_PER_VERTEX,
   collectMissionModels,
   readMission,
   type ModelSpec,
 } from './lib/mission.ts';
-import { ComponentTable, readGunnery, readMechStats, readVehicleStats, type MechStats, type VehicleStats } from './lib/combat-data.ts';
+import { ComponentTable, readGunnery, readMechStats, readTurretStats, readVehicleStats, type MechStats, type VehicleStats } from './lib/combat-data.ts';
 import { buildModel, TextureLibrary } from './lib/model.ts';
 import { readScenarios, scenarioNeeds } from './lib/scenario.ts';
 import { SourceData } from './lib/srcdata.ts';
@@ -225,8 +226,8 @@ const units = mission.parts.flatMap((p, i) => {
   if (!key) return [];
   const info = models.infos.get(p.objectNumber)!;
   // A vehicle whose model walks is infantry.
-  const walks = models.specs.get(key)?.clips.some((c) => c.clip === 'walk');
-  const kind = info.cls === ObjectClass.Mech ? 'mech' : walks ? 'infantry' : 'vehicle';
+  const spec = models.specs.get(key);
+  const kind = info.cls === ObjectClass.Mech ? 'mech' : spec && walks(spec) ? 'infantry' : 'vehicle';
   const profile = mission.profiles.get(p.pilot);
   return [
     {
@@ -247,8 +248,10 @@ const units = mission.parts.flatMap((p, i) => {
 });
 const showcase = extraMechs.map((m) => m.toLowerCase()).filter((m) => m in mechMeta);
 for (const m of showcase) statsFor('mech', m, '');
-// The scenarios' unit types: a mech walks on its gestures; a vehicle whose model walks (has a walk clip) is infantry.
-const types: Record<string, { kind: 'mech' | 'vehicle' | 'infantry'; name: string; model: string; stats: string | null }> = {};
+// The scenarios' unit types: a mech walks on its gestures; a vehicle whose model walks (has a walk clip) is infantry;
+// a turret is a structure (it stays where it's built).
+const types: Record<string, { kind: 'mech' | 'vehicle' | 'infantry' | 'structure'; name: string; model: string; stats: string | null; gunnery?: number }> =
+  {};
 for (const u of needs.units) {
   if (scenarioMechs.includes(u)) {
     const meta = mechMeta[u] as { model: string } | undefined;
@@ -259,8 +262,15 @@ for (const u of needs.units) {
   const spec = models.specs.get(models.extraModels.get(u) ?? '');
   if (!spec) continue;
   const fitName = src.actual(`objects/${u}.fit`)!.split('/').pop()!;
+  const fit = src.fit(`objects/${fitName}`);
+  if (fit.num('ObjectClass', 'ObjectTypeNum') === ObjectClass.Turret) {
+    const { stats, gunnery } = readTurretStats(fit, components);
+    vehicleStats[u] = stats;
+    types[u] = { kind: 'structure', name: stats.name || u, model: modelPath(spec), stats: u, gunnery };
+    continue;
+  }
   types[u] = {
-    kind: spec.clips.some((c) => c.clip === 'walk') ? 'infantry' : 'vehicle',
+    kind: walks(spec) ? 'infantry' : 'vehicle',
     name: src.fit(`objects/${fitName}`).str('ObjectType', 'Name') || u,
     model: modelPath(spec),
     stats: statsFor('vehicle', '', fitName),

@@ -44,6 +44,7 @@ New:
 - `app/match.ts`: Advance and Secure on a scenario (`scenarios/*.json`): capture points, tickets, bases that
   reinforce and refit, fog of war, infantry digging in, and the AI commander. `app/squads.ts`: squads (formation
   moves, attacks, strength). `app/airlift.ts`: the Karnov flying infantry, on its own landing and take-off clips.
+  `app/logistics.ts`: supply trucks and the forward bases they build, supply, and the services bases give.
   `app/match-hud.ts`: the ticket and point bar, the squad cards, and squad letters over the field. `app/mc2-map.ts`: MC2 heights in metres and a bilinear upsample. `app/orbit-controls.ts`:
   the RTS camera with touch. `main.ts`.
 - `../paint.ts` (shared with the three.js viewer): MC2's team paint.

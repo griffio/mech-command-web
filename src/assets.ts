@@ -69,10 +69,12 @@ export interface UnitPlacement {
 
 /** A unit type a scenario uses: how it moves and fights, its model, and its stats key in combat.json. */
 export interface UnitTypeInfo {
-  kind: 'mech' | 'vehicle' | 'infantry';
+  kind: 'mech' | 'vehicle' | 'infantry' | 'structure';
   name: string;
   model: string;
   stats: string | null;
+  /** A structure's gunner's skill (a turret's PilotSkill). */
+  gunnery?: number;
 }
 
 export interface UnitsFile {
@@ -96,7 +98,7 @@ export type {
   VehicleStats,
   WeaponDef,
 } from '../tools/lib/combat-data.ts';
-export type { Scenario, ScenarioPoint, ScenarioSide, ScenarioSquad } from '../tools/lib/scenario.ts';
+export type { Scenario, ScenarioLogistics, ScenarioPoint, ScenarioSide, ScenarioSquad } from '../tools/lib/scenario.ts';
 
 /** combat.json: the weapons and ammunition the map's units carry, and each unit type's armour and loadout. */
 export interface CombatFile {

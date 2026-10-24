@@ -186,7 +186,10 @@ pre#perf-status {
   right: max(12px, env(safe-area-inset-right));
   bottom: max(12px, env(safe-area-inset-bottom));
   display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: flex-end;
   gap: 8px;
+  max-width: 240px;
 }
 
 #commands button {
@@ -347,7 +350,7 @@ pre#perf-status {
 
 /* In a match the squad cards take the bottom edge: the HUD text sits above them, and the help gives way. */
 body.match #hud {
-  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 76px);
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + var(--cards-height, 64px) + 12px);
   right: 260px;
 }
 
@@ -453,4 +456,17 @@ body.match #help {
 
 .squad-marker[hidden] {
   display: none;
+}
+
+/* The letters and bars over the field stay under the HUD's panels. */
+#bars {
+  z-index: 0;
+}
+
+#hud,
+#match,
+#squads,
+#commands,
+#perf {
+  z-index: 2;
 }
