@@ -114,6 +114,8 @@ const REMEASURE_WARMUP_MS = 700;
  */
 const TARGET_REFRESHES = 6;
 const MAX_REPEATS = 160;
+/** Real-time samples start counting this long after a change of settings. */
+const SETTLE_MS = 1000;
 
 const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
@@ -131,6 +133,8 @@ export class PerfSurvey {
   repeats = 1;
   /** The main loop should move and fight the units (while running; outside a survey they always do). */
   worldLive = false;
+  /** The page should leave its HUD alone (the stats line, the selection, the health bars). */
+  quietHud = false;
   private frames = 0;
   private intervalSum = 0;
   private intervalMin = Infinity;
@@ -176,20 +180,26 @@ export class PerfSurvey {
   }
 
   /**
-   * Play in real time, one frame per refresh at full resolution, until `done` or `maxMs`, and return how the frames
-   * went. `counters` is sampled every frame for its peaks (particles, beams). With `worldLive` false the units only
-   * stand and breathe: what the page's frame pacing is with nothing happening.
+   * Play in real time, one frame per refresh, until `done` or `maxMs`, and return how the frames went. `counters` is
+   * sampled every frame for its peaks (particles, beams). With `worldLive` false the units only stand and breathe:
+   * what the page's frame pacing is with nothing happening.
    */
-  async sampleLive(maxMs: number, done: () => boolean, counters: () => Record<string, number>, worldLive = true): Promise<LiveSample> {
+  async sampleLive(opts: {
+    maxMs: number;
+    done?: () => boolean;
+    counters?: () => Record<string, number>;
+    worldLive?: boolean;
+    scale?: number;
+  }): Promise<LiveSample> {
+    const { maxMs, done = () => false, counters = () => ({}), worldLive = true, scale = 1 } = opts;
     this.running = true;
     this.worldLive = worldLive;
     this.repeats = 1;
-    this.setScale(1);
+    this.setScale(scale);
     const live = { interval: [] as number[], js: [] as number[], sim: [] as number[], peaks: {} as Record<string, number>, counters };
-    const t0 = performance.now();
     try {
-      await wait(300); // let the new resolution settle before counting
-      live.interval.length = live.js.length = live.sim.length = 0;
+      await wait(SETTLE_MS); // let a new resolution or setting settle before counting
+      const t0 = performance.now();
       this.live = live;
       while (performance.now() - t0 < maxMs && !done()) await wait(100);
     } finally {

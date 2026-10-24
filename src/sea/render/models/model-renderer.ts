@@ -303,7 +303,13 @@ export class ModelRenderer {
    * List the instances in the camera's view, and those within `shadowReach` metres of the shadow map's focus (they may
    * cast into it), then upload the matrices and lists.
    */
-  update(camera: Camera, shadowFocus: { x: number; z: number; reach: number } | null, drawUnits = true, drawProps = true): void {
+  update(
+    camera: Camera,
+    shadowFocus: { x: number; z: number; reach: number } | null,
+    drawUnits = true,
+    drawProps = true,
+    uploadMatrices = true,
+  ): void {
     const [cx, cy, cz] = camera.position;
     const tanY = camera.tanHalfFovY;
     const tanX = tanY * camera.aspect;
@@ -364,7 +370,7 @@ export class ModelRenderer {
       this.shadowInstances += model.shadowCount;
     }
     if (slot > 0) this.device.queue.writeBuffer(this.baseBuffer, 0, this.baseData, 0, slot);
-    if (this.matrixCount > 0) this.device.queue.writeBuffer(this.matrixBuffer, 0, this.matrixData, 0, this.matrixCount * AFFINE_FLOATS);
+    if (this.matrixCount > 0 && uploadMatrices) this.device.queue.writeBuffer(this.matrixBuffer, 0, this.matrixData, 0, this.matrixCount * AFFINE_FLOATS);
   }
 
   draw(pass: GPURenderPassEncoder): void {

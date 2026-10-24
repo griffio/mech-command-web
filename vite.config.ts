@@ -57,6 +57,13 @@ function perfReports(): Plugin {
         const range = r.costLowMs !== undefined ? `${r.costLowMs.toFixed(2)}-${(r.costHighMs ?? r.costMs).toFixed(2)}` : r.costMs.toFixed(2);
         console.log(`  ${(r.view ?? '').padEnd(12)} ${r.name.padEnd(30)} ${range.padStart(11)} ms${r.clipped ? '*' : ' '}  (${r.deltaMs >= 0 ? '+' : ''}${r.deltaMs.toFixed(2)})`);
       }
+      // The pacing survey: the opening view in real time, as it is and with each suspect taken away.
+      for (const s of report.samples ?? []) {
+        console.log(
+          `  ${s.name.padEnd(28)} ${s.fps.toFixed(1).padStart(5)} fps, refresh p95 ${s.intervalMs.p95.toFixed(0)} ms, ` +
+            `max ${s.intervalMs.max.toFixed(0)} ms, ${s.over20} over 20 ms`,
+        );
+      }
       // The battle survey in real time: the units standing, then the fight.
       for (const [name, live] of [['standing', report.standing], ['live fight', report.live]] as const) {
         if (!live) continue;
@@ -79,7 +86,7 @@ function perfReports(): Plugin {
 interface LiveSummary {
   seconds: number;
   fps: number;
-  intervalMs: { p99: number };
+  intervalMs: { p95: number; p99: number; max: number };
   over20: number;
   jsMs: { p50: number; max: number };
 }
@@ -88,6 +95,7 @@ interface PerfReportSummary {
   label?: string;
   scenarios?: { name: string; fps: number; frameMs: { p95: number } }[];
   standing?: LiveSummary;
+  samples?: (LiveSummary & { name: string })[];
   live?: LiveSummary;
   rows?: { view?: string; name: string; costMs: number; costLowMs?: number; costHighMs?: number; deltaMs: number; clipped: boolean }[];
 }

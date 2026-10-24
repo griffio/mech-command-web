@@ -7,6 +7,7 @@ import '../style.css';
 import { ASSET_ROOT, loadBinary, loadJson, type MapInfo } from '../assets.ts';
 import { OrbitControls } from './app/orbit-controls';
 import { runBattleSurvey } from './app/battle-survey';
+import { runPacingSurvey } from './app/pacing-survey';
 import { PerfSurvey, SEA_STEPS } from './app/perf-survey';
 import { initGpu } from './platform/gpu-device';
 import { CanvasSizer } from './platform/resize';
@@ -161,6 +162,19 @@ async function main() {
       },
     },
     {
+      button: 'perf-pacing',
+      kind: 'pacing-survey',
+      intro: "Pacing survey: the opening view in real time, nine ways. Don't touch the screen for about two minutes.",
+      run: (log) => runPacingSurvey(survey, sea, view(opening), log),
+      start: () => {
+        before = { target: [...controls.target], distance: controls.distance, yawDeg: controls.yawDeg, pitchDeg: controls.pitchDeg };
+      },
+      done: () => {
+        restoreScale();
+        if (before) view(before)();
+      },
+    },
+    {
       button: 'perf-battle',
       kind: 'battle-survey',
       intro: "Battle survey: every unit in one fight. Don't touch the screen for about four minutes.",
@@ -182,7 +196,7 @@ async function main() {
     camera.update(canvas.clientWidth / Math.max(canvas.clientHeight, 1));
     const simStart = performance.now();
     world.update(dt, !survey.running || survey.worldLive);
-    bars.update(world, camera, canvas.clientWidth, canvas.clientHeight);
+    if (!survey.quietHud) bars.update(world, camera, canvas.clientWidth, canvas.clientHeight);
     const simMs = performance.now() - simStart;
     // The shadow map covers what the camera looks at, growing in 25% steps as it zooms out (so it doesn't shimmer). The
     // shadows fade out between 700 and 1000 m: from further off a tree's shadow is a pixel or two, and the map's own
@@ -204,7 +218,7 @@ async function main() {
     }
 
     fpsFrames++;
-    if (now - fpsSince > 500) {
+    if (now - fpsSince > 500 && !survey.quietHud) {
       const fps = (fpsFrames * 1000) / (now - fpsSince);
       const gpuMs = sea.gpuTimes?.total;
       stats.textContent =

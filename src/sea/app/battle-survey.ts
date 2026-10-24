@@ -69,18 +69,18 @@ export async function runBattleSurvey(
   views[0]!.apply();
   const counters = () => ({ ...sea.fxCounts, ...world.battle.counts });
   log('Real time, one frame per refresh at full resolution: 10 s standing…');
-  const standing = await survey.sampleLive(STANDING_MS, () => false, counters, false);
+  const standing = await survey.sampleLive({ maxMs: STANDING_MS, counters, worldLive: false });
   log(describe(standing));
   log('…then the fight, until one side is destroyed');
   let decidedAt: number | null = null;
-  const live = await survey.sampleLive(
-    LIVE_CAP_MS,
-    () => {
+  const live = await survey.sampleLive({
+    maxMs: LIVE_CAP_MS,
+    done: () => {
       if (world.battle.outcome && decidedAt === null) decidedAt = performance.now();
       return decidedAt !== null && performance.now() - decidedAt > AFTERMATH_MS;
     },
     counters,
-  );
+  });
   const destroyed = fighters.filter((u) => !u.alive).length;
   log(`${describe(live)}; ${destroyed} destroyed, ${world.battle.outcome ?? 'undecided'}`);
   log('Reload the page to play the mission again.');

@@ -97,6 +97,12 @@ export interface SeaDebugFlags {
   skipTerrain: boolean;
   /** Draw the whole circle of the sea's grid, not only the arc the camera can see. */
   oceanWholeCircle: boolean;
+  /** No GPU timestamp queries (nor their readback). */
+  skipTimer: boolean;
+  /** Leave the models' matrices on the GPU as they are (they are otherwise uploaded every frame). */
+  skipMatrixUpload: boolean;
+  /** Only clear the screen: what the browser's own presentation of a WebGPU canvas costs. */
+  bareFrame: boolean;
 }
 
 /** Wakes farther than this from the camera are not built (they would be a few pixels). */
@@ -131,6 +137,9 @@ export class SeaRenderer {
     skipClouds: false,
     skipTerrain: false,
     oceanWholeCircle: false,
+    skipTimer: false,
+    skipMatrixUpload: false,
+    bareFrame: false,
   };
 
   private readonly context: GPUCanvasContext;
@@ -290,6 +299,20 @@ export class SeaRenderer {
 
   frame(dtSeconds: number, camera: Camera): void {
     const { device } = this.gpu;
+    if (this.debug.bareFrame) {
+      const encoder = device.createCommandEncoder({ label: 'bare-frame' });
+      encoder
+        .beginRenderPass({
+          colorAttachments: [
+            { view: this.context.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: 0.1, g: 0.12, b: 0.14, a: 1 } },
+          ],
+        })
+        .end();
+      device.queue.submit([encoder.finish()]);
+      this.frameCounter++;
+      return;
+    }
+    const timer = this.debug.skipTimer ? null : this.timer;
     const p = this.params;
     this.clock += dtSeconds;
     const now = this.frozenTime ?? this.clock;
@@ -364,7 +387,7 @@ export class SeaRenderer {
     this.land.update(camera);
     // Casters within reach of the shadow box: it is tilted along the sun, so things up-sun of it can still throw shade in.
     const reach = shadowOn ? { x: focus.x, z: focus.z, reach: focus.half * 1.45 + 80 } : null;
-    this.models.update(camera, reach, !this.debug.skipUnits, !this.debug.skipProps);
+    this.models.update(camera, reach, !this.debug.skipUnits, !this.debug.skipProps, !this.debug.skipMatrixUpload);
     // Effects age even when they aren't drawn, so they don't pile up meanwhile.
     const drawFx = !this.debug.skipFx;
     this.particles.update(dtSeconds);
@@ -381,7 +404,7 @@ export class SeaRenderer {
     const encoder = device.createCommandEncoder({ label: 'frame' });
     const refreshClouds = !this.debug.skipClouds && this.frameCounter % CLOUD_REFRESH_FRAMES === 0;
     if (this.skyDirty || refreshClouds) {
-      const skyPass = encoder.beginComputePass({ label: 'sky', timestampWrites: this.timer?.compute('sky') });
+      const skyPass = encoder.beginComputePass({ label: 'sky', timestampWrites: timer?.compute('sky') });
       if (this.skyDirty) {
         this.atmosphere.encodeSkyView(skyPass);
         this.skyDirty = false;
@@ -390,7 +413,7 @@ export class SeaRenderer {
       skyPass.end();
     }
     if (!this.debug.freezeOcean) {
-      const oceanPass = encoder.beginComputePass({ label: 'ocean', timestampWrites: this.timer?.compute('ocean') });
+      const oceanPass = encoder.beginComputePass({ label: 'ocean', timestampWrites: timer?.compute('ocean') });
       this.field.encode(oceanPass, loopedTime, p.choppiness, FOAM, seaDt);
       oceanPass.end();
     }
@@ -400,7 +423,7 @@ export class SeaRenderer {
       const shadowPass = encoder.beginRenderPass({
         label: 'sun-shadow',
         colorAttachments: [],
-        timestampWrites: this.timer?.render('shadow'),
+        timestampWrites: timer?.render('shadow'),
         depthStencilAttachment: { view: this.shadow.view, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
       });
       this.models.drawShadow(shadowPass);
@@ -411,7 +434,7 @@ export class SeaRenderer {
     const msaa = this.msaaColor;
     const pass = encoder.beginRenderPass({
       label: 'scene',
-      timestampWrites: this.timer?.render('scene'),
+      timestampWrites: timer?.render('scene'),
       colorAttachments: [
         {
           view: msaa ? this.msaaView! : hdrView,
@@ -435,10 +458,10 @@ export class SeaRenderer {
     }
     pass.end();
 
-    this.post.encode(encoder, this.context.getCurrentTexture().createView(), exposure, p.bloom, this.timer, !this.debug.skipBloom);
-    this.timer?.resolve(encoder);
+    this.post.encode(encoder, this.context.getCurrentTexture().createView(), exposure, p.bloom, timer, !this.debug.skipBloom);
+    timer?.resolve(encoder);
     device.queue.submit([encoder.finish()]);
-    this.timer?.afterSubmit();
+    timer?.afterSubmit();
     this.frameCounter++;
   }
 }
