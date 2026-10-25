@@ -347,6 +347,8 @@ export class World {
   onRefused: (why: string) => void = () => {};
   /** The player picked squads. */
   onSelect: () => void = () => {};
+  /** Draw the rings under the selection and the unit looked at (the Capture button leaves them out of its picture). */
+  showRings = true;
   private rings: ModelInstance[] = [];
   private ringModel: GpuModel | null = null;
   private inspectRing: ModelInstance | null = null;
@@ -924,10 +926,10 @@ export class World {
   /** A green ring under each selected unit (from a pool that grows as needed) and a red one under an inspected unit. */
   private updateRings(): void {
     if (!this.ringModel) return;
-    const marked = [...this.selected].filter((u) => !u.embarked);
+    const marked = this.showRings ? [...this.selected].filter((u) => !u.embarked) : [];
     while (this.rings.length < marked.length) this.rings.push(this.sea.models.addInstance(this.ringModel));
     this.rings.forEach((ring, i) => this.placeRing(ring, marked[i]));
-    if (this.inspectRing) this.placeRing(this.inspectRing, this.inspected ?? undefined);
+    if (this.inspectRing) this.placeRing(this.inspectRing, (this.showRings && this.inspected) || undefined);
   }
 
   private placeRing(ring: ModelInstance, u: SeaUnit | undefined): void {

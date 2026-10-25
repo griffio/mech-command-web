@@ -5,6 +5,61 @@ import { defineConfig, type Connect, type Plugin } from 'vite';
 
 const REPORT_DIR = fileURLToPath(new URL('./perf-reports/', import.meta.url));
 const MAX_REPORT_BYTES = 2_000_000;
+const SHOT_DIR = fileURLToPath(new URL('./screenshots-inbox/', import.meta.url));
+const MAX_SHOT_BYTES = 40_000_000;
+
+/**
+ * Receives the PNG the game's Capture button POSTs to /api/shot (a frame from the device it runs on, iPad or desktop)
+ * and saves it under screenshots-inbox/, with what the camera was looking at beside it as JSON.
+ */
+function screenshots(): Plugin {
+  const handler: Connect.NextHandleFunction = (req, res) => {
+    if (req.method !== 'POST') {
+      res.statusCode = 405;
+      res.end();
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_SHOT_BYTES) {
+        res.statusCode = 413;
+        res.end();
+        req.destroy();
+      } else {
+        chunks.push(chunk);
+      }
+    });
+    req.on('end', () => {
+      if (res.writableEnded) return;
+      const png = Buffer.concat(chunks);
+      if (png.subarray(1, 4).toString('latin1') !== 'PNG') {
+        res.statusCode = 400;
+        res.end('not a PNG');
+        return;
+      }
+      let info: unknown = null;
+      try {
+        info = JSON.parse(decodeURIComponent(String(req.headers['x-shot-info'] ?? 'null')));
+      } catch {
+        // Saved without it.
+      }
+      const name = `shot-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      mkdirSync(SHOT_DIR, { recursive: true });
+      writeFileSync(`${SHOT_DIR}${name}.png`, png);
+      if (info) writeFileSync(`${SHOT_DIR}${name}.json`, JSON.stringify(info, null, 2));
+      console.log(`\nscreenshot (${(png.length / 1e6).toFixed(1)} MB) saved to screenshots-inbox/${name}.png`);
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ file: `screenshots-inbox/${name}.png` }));
+    });
+  };
+  return {
+    name: 'screenshots',
+    configureServer: (server) => void server.middlewares.use('/api/shot', handler),
+    configurePreviewServer: (server) => void server.middlewares.use('/api/shot', handler),
+  };
+}
 
 /**
  * Receives the JSON report the viewer's "Run perf test" button POSTs to
@@ -104,7 +159,7 @@ export default defineConfig(({ mode }) => ({
   // `npm run dev:https` serves over HTTPS with a self-signed certificate. WebGPU
   // only exists in secure contexts, so the perf test can only probe it that way
   // from another device on the LAN.
-  plugins: [perfReports(), ...(mode === 'https' ? [basicSsl()] : [])],
+  plugins: [perfReports(), screenshots(), ...(mode === 'https' ? [basicSsl()] : [])],
   // GitHub Pages serves a project site from /<repository>/ (see .github/workflows/pages.yml).
   base: process.env.BASE_PATH || '/',
   server: { host: true },

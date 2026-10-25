@@ -143,6 +143,8 @@ export class SeaRenderer {
   };
 
   private readonly context: GPUCanvasContext;
+  /** Waiting for the next frame's picture (see capture()). */
+  private captureWanted: ((image: ImageData) => void) | null = null;
   private readonly scene = new SceneBlock();
   private readonly sceneBuffer: GPUBuffer;
   private msaaColor: GPUTexture | null = null;
@@ -192,7 +194,30 @@ export class SeaRenderer {
     const context = canvas.getContext('webgpu');
     if (!context) throw new Error('Could not acquire a webgpu canvas context');
     this.context = context;
-    this.context.configure({ device: gpu.device, format: gpu.canvasFormat, alphaMode: 'opaque' });
+    this.configureCanvas(false);
+  }
+
+  /**
+   * The next frame's picture as drawn (without the page's HTML over it). The canvas is made copyable for that frame
+   * only, so the frames around it are drawn as they always are.
+   */
+  capture(): Promise<ImageData> {
+    this.configureCanvas(true);
+    return new Promise((resolve) => {
+      this.captureWanted = (image) => {
+        this.configureCanvas(false);
+        resolve(image);
+      };
+    });
+  }
+
+  private configureCanvas(copyable: boolean): void {
+    this.context.configure({
+      device: this.gpu.device,
+      format: this.gpu.canvasFormat,
+      alphaMode: 'opaque',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | (copyable ? GPUTextureUsage.COPY_SRC : 0),
+    });
   }
 
   static async create(gpu: GpuContext, canvas: HTMLCanvasElement, quality: SeaQuality, params: SeaParams = DEFAULT_SEA): Promise<SeaRenderer> {
@@ -459,9 +484,44 @@ export class SeaRenderer {
     pass.end();
 
     this.post.encode(encoder, this.context.getCurrentTexture().createView(), exposure, p.bloom, timer, !this.debug.skipBloom);
+    const readback = this.captureWanted ? this.copyPicture(encoder, this.captureWanted) : null;
+    this.captureWanted = null;
     timer?.resolve(encoder);
     device.queue.submit([encoder.finish()]);
     timer?.afterSubmit();
+    readback?.();
     this.frameCounter++;
+  }
+
+  /**
+   * Copy the canvas's picture into a buffer as the frame is drawn; the returned function, called once the frame is
+   * submitted, reads it back and hands it over as RGBA.
+   */
+  private copyPicture(encoder: GPUCommandEncoder, done: (image: ImageData) => void): () => void {
+    const texture = this.context.getCurrentTexture();
+    const { width, height } = texture;
+    const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
+    const buffer = this.gpu.device.createBuffer({ label: 'capture', size: bytesPerRow * height, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow }, [width, height]);
+    const bgra = texture.format.startsWith('bgra');
+    return () =>
+      void buffer.mapAsync(GPUMapMode.READ).then(() => {
+        const src = new Uint8Array(buffer.getMappedRange());
+        const pixels = new Uint8ClampedArray(width * height * 4);
+        for (let y = 0; y < height; y++) {
+          const row = src.subarray(y * bytesPerRow, y * bytesPerRow + width * 4);
+          pixels.set(row, y * width * 4);
+        }
+        if (bgra) {
+          for (let i = 0; i < pixels.length; i += 4) {
+            const b = pixels[i]!;
+            pixels[i] = pixels[i + 2]!;
+            pixels[i + 2] = b;
+          }
+        }
+        buffer.unmap();
+        buffer.destroy();
+        done(new ImageData(pixels, width, height));
+      });
   }
 }

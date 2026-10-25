@@ -523,7 +523,7 @@ body.match #help {
   border-left-color: #f2b84b;
 }
 
-#audio-toggles {
+#top-buttons {
   position: fixed;
   top: max(10px, env(safe-area-inset-top));
   right: max(12px, env(safe-area-inset-right));
@@ -533,12 +533,12 @@ body.match #help {
   gap: 6px;
 }
 
-#audio-toggles[hidden],
-#audio-toggles button[hidden] {
+#top-buttons[hidden],
+#top-buttons button[hidden] {
   display: none;
 }
 
-#audio-toggles button {
+#top-buttons button {
   height: 36px;
   padding: 0 12px;
   border-radius: 8px;
@@ -549,13 +549,17 @@ body.match #help {
   touch-action: manipulation;
 }
 
-#audio-toggles button[aria-pressed='false'] {
+#top-buttons button[aria-pressed='false'] {
   color: #a7adb1;
 }
 
-/* Where the match bar leaves no room beside it, the sound buttons go under it. */
+#top-buttons #capture:disabled {
+  color: #a7adb1;
+}
+
+/* Where the match bar leaves no room beside it, these buttons go under it. */
 @media (max-width: 1000px) {
-  #audio-toggles {
+  #top-buttons {
     top: calc(max(10px, env(safe-area-inset-top)) + 62px);
     flex-direction: row;
   }
@@ -576,7 +580,7 @@ body.match #help {
 #squads,
 #commands,
 #notice,
-#audio-toggles,
+#top-buttons,
 #perf {
   z-index: 2;
 }

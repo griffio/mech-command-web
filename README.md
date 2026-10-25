@@ -253,6 +253,16 @@ ran at 57.4 fps with no frame over 31 ms and 2–5 ms of JavaScript a frame; ten
 seconds of standing still at that point paced the same, so the shortfall is the
 device after minutes of stress rendering, not the fight.
 
+### Screenshots from a device
+
+On the dev server, **Capture** (top right) takes a picture on the device the game
+runs on, an iPad say, and sends it to the Mac. It copies the next frame off the
+GPU at full render scale, without the selection rings and without the page's
+HTML (the cards, the top bar, the squad letters), and the dev server saves it as
+a PNG in `screenshots-inbox/` (git-ignored), with the camera's view and the match
+time in a JSON file beside it. For shots with the HUD, use the device's own
+screenshot.
+
 ## The viewer (WebGL)
 
 Controls as above. Its panel switches animations, toggles run/patrol, spawns
@@ -276,6 +286,7 @@ adapter's features. The report goes to the same `/api/perf` endpoint.
 | `docs/screenshots/` | The pictures in this README |
 | `src/*.ts` | The three.js viewer; `src/paint.ts` and `src/assets.ts` are shared |
 | `vendor/`, `public/assets/` | Downloaded and generated data; git-ignored |
+| `perf-reports/`, `screenshots-inbox/` | What the dev server receives from devices (perf reports, captured frames); git-ignored |
 
 Converted output per mission: `map.json` (terrain size, water, light, camera
 start), `elevation.bin` (Float32 heights), `colormap.webp`, `objects.json`

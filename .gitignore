@@ -7,4 +7,6 @@ vendor/
 public/assets/
 # Perf test reports POSTed by the viewer (see vite.config.ts)
 perf-reports/
+# Frames sent by the game's Capture button (see vite.config.ts)
+screenshots-inbox/
 .DS_Store

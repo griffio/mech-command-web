@@ -162,6 +162,8 @@ async function main() {
   const sizer = new CanvasSizer(canvas, gpu.device.limits.maxTextureDimension2D, (w, h) => sea.resize(w, h), MAX_PIXELS);
   if (fixedScale !== null) sizer.renderScale = fixedScale;
   const scaler = new RenderScaleController();
+  /** A frame is being captured at full render scale: the scaler leaves it be. */
+  const capture = { active: false };
   // The survey measures from fixed views, so runs can be compared: the opening view over the player's lance, and the
   // whole map zoomed out, which is mostly sea.
   const opening = { target: [info.camera.x / upm, 0, -info.camera.y / upm] as [number, number, number], distance: 340, yawDeg: 0, pitchDeg: 42 };
@@ -226,6 +228,8 @@ async function main() {
     },
   ]);
 
+  if (import.meta.env.DEV) mountCapture(sea, world, sizer, controls, notice, capture, mapName);
+
   setStatus('');
   let last = performance.now();
   let fpsFrames = 0;
@@ -262,7 +266,7 @@ async function main() {
     for (let i = 0; i < repeats; i++) sea.frame(dt / repeats, camera);
     const cpuMs = (performance.now() - encodeStart) / repeats;
     survey.onFrame(frameMs, cpuMs, simMs);
-    if (fixedScale === null && !survey.running) {
+    if (fixedScale === null && !survey.running && !capture.active) {
       const next = scaler.sample(frameMs, dt);
       if (next !== null) sizer.renderScale = next;
     }
@@ -398,6 +402,62 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
   });
 }
 
+/**
+ * The Capture button (dev server only): the next frame, at full render scale and without the selection rings (nor the
+ * page's HTML), sent as a PNG to the dev server, which saves it in screenshots-inbox/ with the camera's view beside it.
+ */
+function mountCapture(
+  sea: SeaRenderer,
+  world: World,
+  sizer: CanvasSizer,
+  controls: OrbitControls,
+  notice: Notice,
+  capture: { active: boolean },
+  map: string,
+): void {
+  const button = document.getElementById('capture') as HTMLButtonElement;
+  document.getElementById('top-buttons')!.hidden = false;
+  button.hidden = false;
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    const scale = sizer.renderScale;
+    capture.active = true;
+    sizer.renderScale = 1;
+    world.showRings = false;
+    try {
+      const image = await sea.capture();
+      world.showRings = true;
+      sizer.renderScale = scale;
+      capture.active = false;
+      const png = new OffscreenCanvas(image.width, image.height);
+      png.getContext('2d')!.putImageData(image, 0, 0);
+      const blob = await png.convertToBlob({ type: 'image/png' });
+      const info = {
+        map,
+        size: `${image.width}x${image.height}`,
+        view: { target: controls.target, distance: controls.distance, yawDeg: controls.yawDeg, pitchDeg: controls.pitchDeg },
+        matchTime: world.match?.time ?? null,
+        userAgent: navigator.userAgent,
+      };
+      const res = await fetch(`${import.meta.env.BASE_URL}api/shot`, {
+        method: 'POST',
+        headers: { 'content-type': 'image/png', 'x-shot-info': encodeURIComponent(JSON.stringify(info)) },
+        body: blob,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { file } = (await res.json()) as { file: string };
+      notice.show(`Saved on the Mac: ${file}`);
+    } catch (e) {
+      notice.show(`Capture failed: ${e instanceof Error ? e.message : String(e)}`, 'refused');
+    } finally {
+      world.showRings = true;
+      sizer.renderScale = scale;
+      capture.active = false;
+      button.disabled = false;
+    }
+  });
+}
+
 /** The sound and music on/off buttons (remembered between visits). */
 function mountAudioToggles(sound: Sound, music: Music | null): void {
   const toggle = (id: string, name: string, on: () => boolean, set: (on: boolean) => void) => {
@@ -413,7 +473,7 @@ function mountAudioToggles(sound: Sound, music: Music | null): void {
       show();
     });
   };
-  document.getElementById('audio-toggles')!.hidden = false;
+  document.getElementById('top-buttons')!.hidden = false;
   toggle('sound-toggle', 'Sound', () => !sound.isMuted, (on) => sound.setMuted(!on));
   if (music) toggle('music-toggle', 'Music', () => music.isOn, (on) => music.setOn(on));
 }
