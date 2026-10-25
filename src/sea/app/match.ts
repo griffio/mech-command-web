@@ -464,14 +464,18 @@ function clearance(at: [number, number], threats: Threat[]): number {
   return c;
 }
 
-/** What losing a unit costs its side: a mech by its weight, power armour two, a soldier or a vehicle less. */
+/**
+ * What losing a unit costs its side: a mech by its weight, power armour two, a soldier or a vehicle one. MC2's vehicles
+ * go down to a hit or two (7 points a side, against a mech's hundreds), like soldiers; at more, a side with armour bleeds
+ * tickets for it.
+ */
 function ticketCost(u: SeaUnit): number {
   const stats = u.combat?.stats;
   // A forward base's loss is charged when its tent falls (logistics.ts); a turret costs nothing.
   if (u.kind === 'structure') return 0;
   if (u.kind === 'mech') return Math.max(4, Math.round((stats?.tonnage ?? 40) / 10));
   if (u.kind === 'infantry') return (stats?.tonnage ?? 1) > 2 ? 2 : 1;
-  return 3;
+  return 1;
 }
 
 /**

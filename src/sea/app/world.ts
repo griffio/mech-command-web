@@ -20,7 +20,7 @@ import type { SeaRenderer } from '../render/sea-renderer';
 import { parseGlb, type ModelData } from '../models/glb';
 import { AFFINE_FLOATS, Animator, mulAffine, placement, restPose } from '../models/pose';
 import type { StrikeStats, VehicleStats } from '../../assets.ts';
-import { MechCombat, VehicleCombat } from '../sim/combat';
+import { FIRE_ARC, MechCombat, VehicleCombat } from '../sim/combat';
 import { MoveGrid, type MoveClass } from '../sim/move-grid';
 import type { Terrain } from '../sim/terrain/terrain';
 import { Battle } from './battle';
@@ -69,6 +69,11 @@ const MOVING_GIVES = 3;
  * pivot to target, BattleMech::pivotTo and GroundVehicle's; gamesys FireArc), so it meets its target with its front.
  */
 const PIVOT_ARC: Record<Exclude<UnitKind, 'structure'>, number> = { mech: 25, vehicle: 25, infantry: 45 };
+/**
+ * One with no torso or turret to turn (the Centipede, Elementals) fires only within FIRE_ARC of its front, so turns
+ * sooner than that: within the fire arc, less this margin, degrees.
+ */
+const PIVOT_MARGIN = 2.5;
 
 /** Paint for burnt-out wrecks: every team colour goes to soot. */
 const WRECK_PAINT: PaintScheme = { red: '#2b2724', green: '#2b2724', blue: '#2b2724' };
@@ -181,7 +186,7 @@ export class SeaUnit {
   }
 
   /** How far the torso or turret turns either way, degrees (0: the hull must face the target). */
-  private get twistLimit(): number {
+  get twistLimit(): number {
     const stats = this.combat?.stats;
     if (!stats) return 0;
     return 'torsoYaw' in stats ? stats.torsoYaw : stats.turretYaw;
@@ -292,7 +297,7 @@ export class SeaUnit {
   private faceTarget(dt: number): void {
     const t = this.target!;
     const rel = wrapDegrees(bearing(this, t) - this.rotation);
-    const slack = this.kind === 'structure' ? Math.max(this.twistLimit - 10, 5) : PIVOT_ARC[this.kind];
+    const slack = this.kind === 'structure' ? Math.max(this.twistLimit - 10, 5) : Math.min(PIVOT_ARC[this.kind], this.twistLimit + FIRE_ARC - PIVOT_MARGIN);
     if (Math.abs(rel) > slack) {
       this.rotation = (this.rotation + Math.sign(rel) * Math.min(Math.abs(rel), TURN_RATE * dt) + 360) % 360;
       this.play('walk');

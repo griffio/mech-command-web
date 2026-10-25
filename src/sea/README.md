@@ -86,9 +86,12 @@ pilots' gunnery from `missions/warriors/*.fit`):
   or out of sight of its target, it walks to a spot on a ring at that range
   about the target: near it, off its squadmates' spots, and (this project's
   addition) one it can see the target from. Enemy units at range step round the
-  ring every few seconds (MC2's `keepMoving`, calmer), and stop to fight what
-  they meet within reach on a move. A unit standing with a target turns to face
-  it once it's more than 25° off its front (45° for infantry; gamesys `FireArc`).
+  ring every few seconds (MC2's `keepMoving`, calmer; not those whose guns face
+  only ahead), and stop to fight what they meet within reach on a move. A unit
+  standing with a target turns to face it once it's more than 25° off its front
+  (45° for infantry; gamesys `FireArc`), or with no turret or torso to turn, 10°,
+  so its guns bear. A side the AI commands follows these enemy rules, so a match
+  the AI plays against itself (a test) is a fair one.
   Units keep 8.5 m apart (soldiers 3 m), shuffling apart when they crowd.
 - Every loaded weapon that is in its range band (short 0-60 m, medium 30-120,
   long 60-180, give or take 12 m), in sight (LRMs may use a teammate's), and

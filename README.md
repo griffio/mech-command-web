@@ -108,8 +108,9 @@ AI commander.
   standing in its circle with no enemy there turns it, faster with more units
   (an enemy point goes neutral first). The top bar shows tickets, each point's
   holder and progress, and the points in play (dashed).
-- **Tickets.** Every unit lost costs its side tickets (a mech by its weight), and
-  so does every point lost. A side loses when its tickets run out, or wins by
+- **Tickets.** Every unit lost costs its side tickets (a mech by its weight, 4
+  to 10; an Elemental 2; a soldier or a vehicle 1, as a vehicle goes down to a hit
+  or two), and so does every point lost. A side loses when its tickets run out, or wins by
   holding every point.
 - **Bases.** A wiped-out squad comes back at its base after a while. A squad
   standing at its base gets missing members back one at a time, and its
@@ -205,8 +206,10 @@ in the last minute, and well clear of any point you hold or have units in (the
 HUD shows it those counts, as it shows you); if the landing zone turns hot on
 the way, the Karnov goes somewhere else. Infantry don't go in on a point you hold
 ahead of their mechs and vehicles: they dig in out of sight and wait, then go in
-with them. Played against itself, a match
-runs about 12 minutes and goes either way. `?scenario=none` shows the mission's
+with them. Played against itself (both sides then fight by its rules), a match
+runs about 9 to 10 minutes; your side won five of six such matches, by 15 to 64
+tickets, and Liao one by 16 (your pilots are the better: gunnery 45 to 55
+against Liao's 38 to 42). `?scenario=none` shows the mission's
 own units instead (your lance is then its three mechs plus an Atlas and a
 Madcat), and `?speed=4` runs the world four times as fast (for testing).
 
@@ -239,7 +242,8 @@ profiles. In short:
   the target from and away from where its lancemates are going. The enemy's
   units keep moving round that ring while they fight, as MC2's AI does (a
   calmer step every few seconds), and stop to fight what they meet on their way
-  to a point. Units keep a few metres apart (a mech or vehicle 8.5 m, MC2's
+  to a point. A unit whose guns face only ahead (the Centipede, Elementals) holds
+  its spot instead, and turns to keep its target within its 12.5° fire arc. Units keep a few metres apart (a mech or vehicle 8.5 m, MC2's
   movement-map cell), so none stands inside another.
 - Every loaded weapon in its range band (short, medium, long), in sight and
   within 12.5° of where the torso points fires; a mech's torso turns 120° either

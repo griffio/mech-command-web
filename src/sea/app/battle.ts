@@ -277,8 +277,9 @@ export class Battle {
 
   /**
    * Units under an attack order, and every enemy unit with a target near where its squad was sent (or within its reach on
-   * the way there), fight from the distance they want to (see KEEP_RANGE_M), and the enemy's circle their targets. The
-   * player's other units hold where they are (or keep to the route they were given) and fire at what comes into range.
+   * the way there), fight from the distance they want to (see KEEP_RANGE_M), and the enemy's circle their targets (those
+   * that can turn their guns). The player's other units hold where they are (or keep to the route they were given) and
+   * fire at what comes into range.
    */
   private close(u: SeaUnit): void {
     if (u.kind === 'structure' || u.pinned) return; // turrets and tents stay put; pinned soldiers stay down
@@ -293,7 +294,7 @@ export class Battle {
     if (u.route.length && !u.engaging) {
       // Walking where it was sent: the player's units carry on, firing as they pass, and so do the enemy's falling back.
       // The enemy's others stop to fight what they meet within reach (MC2's alarms turn a move into an attack).
-      if (u.team === PLAYER_TEAM || u.squad?.order.kind === 'retreat' || !this.within(u, t)) return;
+      if (!this.aiRun(u) || u.squad?.order.kind === 'retreat' || !this.within(u, t)) return;
       u.stop();
     }
     if (this.time < (this.nextMove.get(u) ?? 0)) return;
@@ -305,8 +306,9 @@ export class Battle {
       if (Math.abs(Math.hypot(end[0] - t.x, end[1] - t.z) - range) <= KEEP_RANGE_M) return;
       spot = this.ringSpot(u, t, range);
     } else if (Math.abs(Math.hypot(t.x - u.x, t.z - u.z) - range) <= KEEP_RANGE_M && this.sees(u, t)) {
-      // At range: the player's units hold, the enemy's step round the target after a pause.
-      if (u.team === PLAYER_TEAM) return;
+      // At range: the player's units hold, the enemy's step round the target after a pause; but not one whose guns
+      // face only ahead (no turret or torso to turn), which can't fire while it drives across the target's front.
+      if (!this.aiRun(u) || !u.twistLimit) return;
       const at = this.circleAt.get(u);
       if (at === undefined) this.circleAt.set(u, this.time + CIRCLE_PAUSE_S[0] + Math.random() * (CIRCLE_PAUSE_S[1] - CIRCLE_PAUSE_S[0]));
       if (at === undefined || this.time < at) return;
@@ -318,9 +320,17 @@ export class Battle {
   /** Whether a unit goes after its target: on an attack order; or the enemy's, near where it was sent or within reach. */
   private hunting(u: SeaUnit, t: SeaUnit): boolean {
     if (u.attackOrder) return true;
-    if (u.team === PLAYER_TEAM) return false;
+    if (!this.aiRun(u)) return false;
     const leashed = !u.leash || Math.hypot(t.x - u.leash.x, t.z - u.leash.z) <= LEASH_M;
     return leashed || (u.squad?.order.kind !== 'retreat' && this.within(u, t));
+  }
+
+  /**
+   * The AI runs its side, so it fights by the AI's rules above: the enemy's units, and the player's when a test gives
+   * their side an AI commander too (so a match the AI plays against itself is a fair one).
+   */
+  private aiRun(u: SeaUnit): boolean {
+    return u.team !== PLAYER_TEAM || (this.world.match?.commanders.has(u.team) ?? false);
   }
 
   /** The target is in sight and within reach of the unit's weapons. */
