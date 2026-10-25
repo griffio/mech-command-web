@@ -14,7 +14,7 @@
 import type { Scenario, ScenarioSide } from '../../assets';
 import { PLAYER_PAINT, paintFromMission, type PaintScheme } from '../../paint.ts';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
-import { bestRange } from '../sim/combat';
+import { SIGHT_RANGE, bestRange } from '../sim/combat';
 import { Airlift } from './airlift';
 import type { Attacker } from './battle';
 import { FOB_RADIUS, Logistics, type ServicePoint } from './logistics';
@@ -39,6 +39,23 @@ const RESPAWN_S = { mech: 45, other: 25 };
 const DIG_IN_S = 8;
 /** The AI flies its infantry to goals further than this on foot (or out of reach on foot), metres. */
 const AI_AIRLIFT_M = 450;
+/**
+ * Where the AI sets its infantry down: out of sight of every enemy it has seen in the last minute (their sight range,
+ * and a margin), and out of reach of whoever holds an enemy point or is in a point (as the HUD shows the player): they
+ * may be anywhere in its circle, and the longest weapon reaches 180 m (gamesys WeaponRanges). It looks for a spot on
+ * rings about the goal, and looks again while the Karnov is on its way.
+ */
+const LZ_CLEAR_M = SIGHT_RANGE + 25;
+const LZ_HELD_POINT_M = 200;
+const INTEL_S = 60;
+const LZ_RING_M = 50;
+const LZ_RINGS = 9;
+const LZ_BEARINGS = 16;
+/**
+ * Infantry go in on such a point with the armour: once a mech or vehicle squad attacking it is no more than this further
+ * from it than they are, metres.
+ */
+const INFANTRY_LEAD_M = 100;
 /** Bodies are cleared after this; wrecks after the second. */
 const CLEAR_INFANTRY_S = 4;
 /** What the AI wants under a strike before it calls one (see CommanderAI.callStrikes). */
@@ -432,6 +449,20 @@ export class Match {
   }
 }
 
+/** Somewhere to keep this far from. */
+interface Threat {
+  x: number;
+  z: number;
+  clear: number;
+}
+
+/** How far a spot is outside the nearest threat's distance, metres (negative inside it). */
+function clearance(at: [number, number], threats: Threat[]): number {
+  let c = Infinity;
+  for (const t of threats) c = Math.min(c, Math.hypot(t.x - at[0], t.z - at[1]) - t.clear);
+  return c;
+}
+
 /** What losing a unit costs its side: a mech by its weight, power armour two, a soldier or a vehicle less. */
 function ticketCost(u: SeaUnit): number {
   const stats = u.combat?.stats;
@@ -445,10 +476,15 @@ function ticketCost(u: SeaUnit): number {
 /**
  * A simple commander for a side: most squads go for the point it can take next, the rest hold the point it must keep,
  * fire-support squads stand off behind the attack, and squads that have lost most of their strength fall back to
- * the base to reinforce and refit.
+ * the base to reinforce and refit. Infantry are flown in short of the enemy, out of its sight, and go in on a point the
+ * enemy is at with the mechs and vehicles, not ahead of them.
  */
 export class CommanderAI {
   private nextThink = 0;
+  /** Where it last saw each enemy (that has weapons), and when. */
+  private readonly sightings = new Map<SeaUnit, { x: number; z: number; at: number }>();
+  /** Squads it has flying, and the goals they're for. */
+  private readonly lifts = new Map<Squad, [number, number]>();
 
   constructor(
     private readonly match: Match,
@@ -459,6 +495,8 @@ export class CommanderAI {
   update(): void {
     if (this.match.time < this.nextThink) return;
     this.nextThink = this.match.time + 5;
+    this.watch();
+    this.waveOff();
     const side = this.match.side(this.team);
     const target = this.match.capturable(this.team);
     const hold = this.match.frontier(this.team);
@@ -466,6 +504,7 @@ export class CommanderAI {
     for (const q of ready.filter((q) => q.isLogistics)) this.supplyRun(q);
     this.callStrikes();
     const squads = ready.filter((q) => !q.isLogistics);
+    const threats = this.threats();
     const attackers = Math.ceil(squads.length * 0.65);
     squads
       .sort((a, b) => b.strength - a.strength)
@@ -482,6 +521,7 @@ export class CommanderAI {
         const d = Math.hypot(side.base.x - p.x, side.base.z - p.z) || 1;
         const x = p.x + ((side.base.x - p.x) / d) * standOff;
         const z = p.z + ((side.base.z - p.z) / d) * standOff;
+        if (index === target && this.waitForArmour(squad, index, threats)) return;
         this.send(squad, index, x, z, false);
       });
   }
@@ -546,9 +586,102 @@ export class CommanderAI {
     }
   }
 
+  /** Note where it sees enemies, and forget those dead or not seen for a while. */
+  private watch(): void {
+    const now = this.match.time;
+    for (const u of this.world.battle.seenBy(this.team)) if (u.alive && u.combat?.weapons.length) this.sightings.set(u, { x: u.x, z: u.z, at: now });
+    for (const [u, s] of this.sightings) if (!u.alive || now - s.at > INTEL_S) this.sightings.delete(u);
+  }
+
+  /**
+   * Infantry don't go in on a point the enemy holds, is in, or has been seen near, ahead of their side's mechs and
+   * vehicles: they wait out of the enemy's sight (and dig in) until a squad of those attacking it is nearly as near it as
+   * they are, then go in with it. True if the squad waits (or goes to wait somewhere).
+   */
+  private waitForArmour(squad: Squad, index: number, threats: Threat[]): boolean {
+    const p = this.match.points[index]!;
+    const c = squad.centroid();
+    if (!squad.isInfantry || !c || clearance([p.x, p.z], threats) >= 0) return false;
+    const armour = this.match.side(this.team).squads.filter((q) => !q.isInfantry && !q.isLogistics);
+    if (!armour.length) return false;
+    const toPoint = (q: Squad) => {
+      const at = q.centroid();
+      return at ? Math.hypot(at[0] - p.x, at[1] - p.z) : Infinity;
+    };
+    const lead = Math.min(...armour.filter((q) => q.assignment === index && q.respawnAt === null && !q.airborne).map(toPoint));
+    if (lead <= toPoint(squad) + INFANTRY_LEAD_M) return false;
+    // Already on its way (in, or to wait): carry on.
+    if (squad.assignment === index && squad.alive.some((u) => u.route.length || u.attackOrder)) return false;
+    // Out of the enemy's sight, and not far off: wait here.
+    if (clearance(c, threats) >= 0 && toPoint(squad) <= AI_AIRLIFT_M) {
+      squad.assignment = index;
+      return true;
+    }
+    const lz = this.landingZone(c, p.x, p.z);
+    if (!lz?.safe) return false;
+    this.send(squad, index, lz.at[0], lz.at[1], false);
+    return true;
+  }
+
+  /** A flight whose landing zone has turned hot goes to a safe one for its goal instead, if there is one. */
+  private waveOff(): void {
+    const threats = this.threats();
+    for (const [squad, [x, z]] of this.lifts) {
+      const drop = this.match.airlift.destination(squad);
+      const from = squad.centroid();
+      if (!squad.airborne || !drop || !from) {
+        this.lifts.delete(squad);
+        continue;
+      }
+      if (clearance(drop, threats) >= 0) continue;
+      const lz = this.landingZone(from, x, z);
+      if (lz?.safe) this.match.airlift.redirect(squad, lz.at[0], lz.at[1]);
+    }
+  }
+
+  /** What to land clear of: the enemies it has seen lately, the points the enemy holds, and those it's in. */
+  private threats(): Threat[] {
+    const threats = [...this.sightings.values()].map((s) => ({ x: s.x, z: s.z, clear: LZ_CLEAR_M }));
+    for (const p of this.match.points) {
+      const held = p.owner !== null && p.owner !== this.team;
+      if (held || p.present.some((n, team) => team !== this.team && n > 0)) threats.push({ x: p.x, z: p.z, clear: p.radius + LZ_HELD_POINT_M });
+    }
+    return threats;
+  }
+
+  /**
+   * Where to set infantry flying from `from` down for a goal: the spot nearest it, on the side they come from, that's
+   * clear of the enemy (see LZ_CLEAR_M) and that they can walk to it from. With no such spot, the one clearest of the
+   * enemy (`safe` false).
+   */
+  private landingZone(from: [number, number], x: number, z: number): { at: [number, number]; safe: boolean } | null {
+    const ground = this.world.grids?.ground;
+    const threats = this.threats();
+    let best: { at: [number, number]; safe: boolean } | null = null;
+    let bestCost = Infinity;
+    let bestClearance = -Infinity;
+    for (let ring = 0; ring <= LZ_RINGS; ring++) {
+      const r = ring * LZ_RING_M;
+      // A safe spot nearer than this ring can't be beaten by one on it.
+      if (best?.safe && r > bestCost) break;
+      for (let i = 0; i < (ring ? LZ_BEARINGS : 1); i++) {
+        const a = (i / LZ_BEARINGS) * Math.PI * 2;
+        const at = this.world.openNear(x + Math.cos(a) * r, z + Math.sin(a) * r, 'ground');
+        if (ground && !ground.connected(at[0], at[1], x, z)) continue;
+        const clear = clearance(at, threats);
+        if (clear >= 0) {
+          // Walking from it to the goal, and a little for flying further: land on the near side.
+          const cost = Math.hypot(at[0] - x, at[1] - z) + 0.25 * Math.hypot(at[0] - from[0], at[1] - from[1]);
+          if (cost < bestCost) [best, bestCost] = [{ at, safe: true }, cost];
+        } else if (!best?.safe && clear > bestClearance) [best, bestClearance] = [{ at, safe: false }, clear];
+      }
+    }
+    return best;
+  }
+
   /**
    * Order a squad to a place, unless it already has that job and is there or on its way. Infantry fly to goals they
-   * can't reach on foot, or that are far.
+   * can't reach on foot, or that are far: set down short of the goal, clear of the enemy, to walk in from there.
    */
   private send(squad: Squad, assignment: number, x: number, z: number, retreat: boolean): void {
     const c = squad.centroid();
@@ -558,8 +691,17 @@ export class CommanderAI {
     const [tx, tz] = [x + (Math.random() - 0.5) * 30, z + (Math.random() - 0.5) * 30];
     const far = c && Math.hypot(c[0] - tx, c[1] - tz) > AI_AIRLIFT_M;
     const unreachable = c && this.world.grids && !this.world.grids.ground.connected(c[0], c[1], tx, tz);
-    // Falling back flies only when there's no way home on foot.
-    if (squad.isInfantry && (unreachable || (far && !retreat)) && this.match.airliftSquad(squad, tx, tz)) return;
+    // Falling back flies only when there's no way home on foot, and straight home.
+    if (squad.isInfantry && c && (unreachable || (far && !retreat))) {
+      const lz = retreat ? { at: [tx, tz] as [number, number], safe: true } : this.landingZone(c, tx, tz);
+      // A far goal is worth the flight only to a safe spot that saves a good walk; one out of reach on foot, to the
+      // clearest spot there is.
+      const saves = lz && Math.hypot(c[0] - tx, c[1] - tz) - Math.hypot(lz.at[0] - tx, lz.at[1] - tz) >= AI_AIRLIFT_M / 2;
+      if (lz && (unreachable || (lz.safe && saves)) && this.match.airliftSquad(squad, lz.at[0], lz.at[1])) {
+        this.lifts.set(squad, [tx, tz]);
+        return;
+      }
+    }
     squad.move(this.world, tx, tz, retreat);
   }
 }

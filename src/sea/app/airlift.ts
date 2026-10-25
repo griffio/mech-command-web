@@ -65,6 +65,19 @@ export class Airlift {
   }
 
   /**
+   * Set a squad's flight down somewhere else, if it hasn't started landing where it was going (the AI waves off a landing
+   * zone that has turned hot). False if it has, or the squad isn't flying.
+   */
+  redirect(squad: Squad, x: number, z: number): boolean {
+    const f = this.flights.find((f) => f.squad === squad);
+    const going = f?.phase === 'take-off' ? f.next : f?.phase;
+    if (!f || going === 'land-drop' || going === 'unload' || going === 'home') return false;
+    f.drop = this.world.openNear(x, z, 'ground');
+    squad.order = { kind: 'move', x: f.drop[0], z: f.drop[1] };
+    return true;
+  }
+
+  /**
    * Send a Karnov from the squad's base to fly it to a point. False when there's no airlift, the squad is already
    * flying, or nobody in it is left.
    */

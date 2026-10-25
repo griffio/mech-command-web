@@ -197,7 +197,12 @@ AI commander.
 The AI sends most of its squads at the point it can take next, holds the
 one it must keep with the rest, stands its LRM carriers off behind the attack,
 flies its infantry to far or cut-off points, and pulls badly hurt squads back to
-reinforce. Played against itself, a match
+reinforce. Its Karnovs set infantry down out of sight of every enemy it has seen
+in the last minute, and well clear of any point you hold or have units in (the
+HUD shows it those counts, as it shows you); if the landing zone turns hot on
+the way, the Karnov goes somewhere else. Infantry don't go in on a point you hold
+ahead of their mechs and vehicles: they dig in out of sight and wait, then go in
+with them. Played against itself, a match
 runs about 12 minutes and goes either way. `?scenario=none` shows the mission's
 own units instead (your lance is then its three mechs plus an Atlas and a
 Madcat), and `?speed=4` runs the world four times as fast (for testing).
