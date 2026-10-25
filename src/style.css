@@ -385,6 +385,12 @@ body.match #help {
   opacity: 0.55;
 }
 
+/* Pinned down by fire. */
+#squads .squad.pinned .status {
+  color: #f2b84b;
+  opacity: 1;
+}
+
 #squads .squad b {
   grid-area: letter;
   font-size: 22px;
@@ -452,6 +458,11 @@ body.match #help {
 .squad-marker.selected {
   border-color: #6fe06f;
   box-shadow: 0 0 0 2px rgb(111 224 111 / 60%);
+}
+
+.squad-marker.pinned {
+  border-color: #f2b84b;
+  border-style: dashed;
 }
 
 .squad-marker[hidden] {

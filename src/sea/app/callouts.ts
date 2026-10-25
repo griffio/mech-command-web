@@ -1,8 +1,8 @@
 // What the player hears and reads as a match goes. Their squads answer orders over the radio in their pilots' voices
-// (MC2's lines: acknowledged, can't do that, can't get there) and call out contacts, attacks, crippling damage, kills
-// and finished refits. Betty announces points taken, forward bases under attack or lost, supply run out, and the
-// result, over the win or lose tune. Refused orders and alerts also show in the middle of the screen, with MC2's buzz
-// or alarm.
+// (MC2's lines: acknowledged, can't do that, can't get there) and call out contacts, attacks, being pinned down,
+// crippling damage, kills and finished refits. Betty announces points taken, forward bases under attack or lost,
+// supply run out, and the result, over the win or lose tune. Refused orders and alerts also show in the middle of the
+// screen, with MC2's buzz or alarm.
 //
 // MC2 says these lines when it does (code/tacordr.cpp, warrior.cpp, mech.cpp, mover.cpp); how often a squad repeats
 // itself is this project's own choice, so that a long fight isn't a running commentary.
@@ -30,6 +30,8 @@ const CRIPPLED = 0.35;
 /** A squad that has lost this much reports when a refit has made it whole again. */
 const REFIT_REPORT_BELOW = 0.95;
 const WHOLE = 0.99;
+/** A squad says it's pinned down at most this often, seconds. */
+const PINNED_QUIET_S = 20;
 const POLL_S = 0.25;
 
 export class Callouts {
@@ -40,6 +42,8 @@ export class Callouts {
   private readonly lastPointAlert = new Map<number, number>();
   private readonly crippled = new Set<SeaUnit>();
   private readonly damaged = new Set<Squad>();
+  private readonly pinned = new Set<Squad>();
+  private readonly lastPinned = new Map<Squad, number>();
   private nextPoll = 0;
 
   constructor(
@@ -69,7 +73,7 @@ export class Callouts {
     if (t < this.nextPoll) return;
     this.nextPoll = t + POLL_S;
     this.contacts(t);
-    this.condition();
+    this.condition(t);
     this.pointsAtRisk(t);
   }
 
@@ -85,6 +89,8 @@ export class Callouts {
     if (done.order === 'move' || done.order === 'airlift' || done.order === 'build') this.sound?.effect('place');
     // MC2 answers an attack order either way, at even odds (tacordr.cpp).
     this.say(done.squad, done.order === 'attack' && Math.random() < 0.5 ? 'targetAck' : 'ack');
+    const pinned = reports.filter((r) => !r.refused && r.order === 'move' && r.squad.pinned).map((r) => r.squad.name);
+    if (pinned.length) this.notice.show(`${pinned.join(' and ')} ${pinned.length > 1 ? 'are' : 'is'} pinned down: moving once the fire slackens`);
   }
 
   private hit(u: SeaUnit): void {
@@ -173,9 +179,17 @@ export class Callouts {
     }
   }
 
-  /** Crippling damage, and refits that have made a squad whole again. */
-  private condition(): void {
+  /** Crippling damage, squads pinned down, and refits that have made a squad whole again. */
+  private condition(t: number): void {
     for (const q of this.match.side(PLAYER_TEAM).squads) {
+      if (q.pinned && !this.pinned.has(q)) {
+        this.pinned.add(q);
+        if (t - (this.lastPinned.get(q) ?? -Infinity) > PINNED_QUIET_S) {
+          this.lastPinned.set(q, t);
+          this.notice.show(`${q.name} is pinned down`, 'alert');
+          this.say(q, 'underAttack');
+        }
+      } else if (!q.pinned) this.pinned.delete(q);
       let worst = 1;
       for (const u of q.alive) {
         const integrity = u.combat?.integrity ?? 1;

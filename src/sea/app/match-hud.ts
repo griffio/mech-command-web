@@ -103,6 +103,7 @@ export class MatchHud {
     for (const [squad, card] of this.cards) {
       card.el.classList.toggle('selected', this.world.selectedSquads.has(squad));
       card.el.classList.toggle('lost', !squad.alive.length);
+      card.el.classList.toggle('pinned', squad.pinned);
       card.bar.style.width = `${Math.round(squad.strength * 100)}%`;
       card.count.textContent = `${squad.alive.length}/${squad.spec.units.length}`;
       card.status.textContent = squad.status(this.match.time);
@@ -128,6 +129,7 @@ export class MatchHud {
         if (show) {
           m.el.style.transform = `translate(${(((this.ndc[0] + 1) / 2) * width).toFixed(1)}px, ${(((1 - this.ndc[1]) / 2) * height).toFixed(1)}px)`;
           m.el.classList.toggle('selected', this.world.selectedSquads.has(squad));
+          m.el.classList.toggle('pinned', squad.pinned);
         }
       }
       if (show !== m.shown) {

@@ -102,6 +102,11 @@ export class SeaUnit {
   /** A supply truck's load, and how much it holds (null for anything else). */
   supply: number | null = null;
   supplyCapacity: number | null = null;
+  /** How suppressed it is by fire landing about it, 0..1 (suppression.ts), and when it last was (game time). */
+  suppression = 0;
+  suppressedAt = -Infinity;
+  /** A soldier pinned down by fire: on the ground, not moving until it slackens. */
+  pinned = false;
   /** A job it's part-way through (a truck building a forward base), shown over it: the share done, and what it is. */
   job: { share: number; label: string } | null = null;
   /** A soldier's body is gone when he dies (there's no wreck to leave). */
@@ -249,8 +254,10 @@ export class SeaUnit {
   /** `move` false keeps the unit where it is (still animating): the perf survey wants the same picture throughout. */
   update(dt: number, terrain: Terrain, move = true): void {
     if (move && this.alive && !this.embarked) {
-      if (this.route.length) this.steer(dt);
+      // Pinned soldiers stay down, and go on where they were going once the fire slackens.
+      if (this.route.length && !this.pinned) this.steer(dt);
       else if (this.target) this.faceTarget(dt);
+      if (this.pinned) this.play('idle');
       this.aim(dt);
     }
     this.animator?.update(dt);

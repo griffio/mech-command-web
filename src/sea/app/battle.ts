@@ -6,6 +6,7 @@ import type { CombatEffects } from '../render/fx/combat-effects';
 import type { Blast, MechLocation } from '../../assets';
 import { ATTACK_RADIUS, COMBAT_TICK, FIRE_ARC, SIGHT_RANGE, arcOf, bestRange, inRange, type HitReport, type WeaponMount } from '../sim/combat';
 import { Rng } from '../sim/rng';
+import { aimShare, settle, suppress, SUPPRESSION } from './suppression';
 import { PLAYER_TEAM, bearing, wrapDegrees, type SeaUnit, type World } from './world';
 
 type V3 = [number, number, number];
@@ -134,6 +135,7 @@ export class Battle {
     this.land();
     this.fly();
     this.burn();
+    settle(this.world.units, dt, this.time);
   }
 
   /** Forget shots in flight, routes and the outcome (the battle survey restages the fight). */
@@ -274,7 +276,7 @@ export class Battle {
     for (const w of combat.weapons) {
       if (!combat.ready(w, this.time) || !inRange(w.def.range, d)) continue;
       if (!own && !(w.def.indirect && spotted)) continue;
-      const hit = combat.fire(w, this.time, this.rng, this.hitModifier(t));
+      const hit = combat.fire(w, this.time, this.rng, this.hitModifier(t) * aimShare(u));
       this.launch(u, t, w, hit, d);
     }
   }
@@ -372,6 +374,8 @@ export class Battle {
     const t = p.target;
     // A laser that misses hits nothing to hear.
     if (p.location || p.weapon.kind !== 'energy') this.onNoise({ kind: 'impact', weapon: p.weapon.id, at: p.point, on: t, by: p.attacker });
+    // Hit or miss, it keeps heads down where it lands.
+    suppress(this.world.units, p.weapon, p.point[0], p.point[2], p.attacker, this.time, this.world.grid);
     if (p.impact) {
       if (p.location) this.fx.hit(p.point, p.scale);
       else this.fx.groundHit(p.point, 0.5 * p.scale + 0.3, this.world.terrain.heightAt(p.point[0], p.point[2]) < 0);
@@ -396,7 +400,7 @@ export class Battle {
     if (t.kind !== 'infantry') return 1;
     const size = (t.combat?.stats.tonnage ?? 1) <= 1 ? INFANTRY_HIT.trooper : INFANTRY_HIT.armoured;
     const cover = this.world.grid?.forestAt(t.x, t.z) ? INFANTRY_HIT.cover : 1;
-    return size * cover * (t.squad?.dugIn ? INFANTRY_HIT.dugIn : 1);
+    return size * cover * (t.squad?.dugIn ? INFANTRY_HIT.dugIn : 1) * (t.pinned ? SUPPRESSION.prone : 1);
   }
 
   private destroyed(t: SeaUnit, by: SeaUnit, report: HitReport): void {

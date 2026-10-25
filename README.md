@@ -130,6 +130,18 @@ AI commander.
 - **Digging in.** Infantry that stand still for 8 seconds dig in behind
   sandbags (MC2's sandbag bunker) and are much harder to hit until they move:
   mechs take ground fast, infantry are flown in to hold it.
+- **Suppression** (this project's rule, after *Squad*; MC2 has none). Every
+  shot that lands, hit or miss, suppresses the enemies near where it lands, by
+  its damage: missiles' explosions and machine-gun bursts most, beams least.
+  Soldiers take it fully, vehicles less than half, mechs a quarter, and it fades
+  a few seconds after the fire stops. A suppressed unit aims worse (up to 60%
+  worse for soldiers, 40% for mechs). Soldiers suppressed enough are **pinned
+  down**: they stay where they are (and go on once the fire slackens), don't count
+  toward taking a point, can't dig in, and are a little harder to hit. Dug-in
+  soldiers take well under half of it, soldiers in woods less. Squad cards and
+  letters show it, and a squad pinned down says so on the radio. So the Catapult
+  and the LRM carriers earn their keep even when they miss: pin the defenders,
+  then close in.
 - **Forward bases.** Each side has a logistics squad: MC2's repair truck,
   carrying its 500 refit points as supply. Select it, press **Build FOB** and
   tap a spot (red rings show where it can't go: within 300 m of your main base

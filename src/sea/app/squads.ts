@@ -4,6 +4,9 @@
 import type { ScenarioSquad } from '../../assets';
 import type { SeaUnit, World } from './world';
 
+/** A squad this suppressed says so on its card. */
+const SUPPRESSED = 0.3;
+
 /** Metres between members in formation, by the squad's largest kind of unit. */
 const SPACING = { mech: 18, vehicle: 14, infantry: 6 } as const;
 
@@ -73,6 +76,19 @@ export class Squad {
     return this.spec.units.length - this.alive.length;
   }
 
+  /** The most suppressed of its members (0..1). */
+  get suppression(): number {
+    let s = 0;
+    for (const u of this.units) if (u.alive) s = Math.max(s, u.suppression);
+    return s;
+  }
+
+  /** At least half of it is pinned down. */
+  get pinned(): boolean {
+    const alive = this.alive;
+    return alive.length > 0 && alive.filter((u) => u.pinned).length * 2 >= alive.length;
+  }
+
   /** The middle of its living members, or null when none are left. */
   centroid(): [number, number] | null {
     const alive = this.alive;
@@ -100,8 +116,10 @@ export class Squad {
       const supply = `supply ${Math.floor(alive[0]!.supply ?? 0)}`;
       return this.task ? `${this.task} · ${supply}` : alive.some((u) => u.route.length) ? `moving · ${supply}` : supply;
     }
-    if (this.dugIn) return alive.some((u) => u.target && u.target.alive) ? 'dug in, fighting' : 'dug in';
-    if (alive.some((u) => u.target && u.combat && u.target.alive)) return 'fighting';
+    if (this.pinned) return this.dugIn ? 'dug in, pinned down' : 'pinned down';
+    const suppressed = this.suppression >= SUPPRESSED ? ', suppressed' : '';
+    if (this.dugIn) return (alive.some((u) => u.target && u.target.alive) ? 'dug in, fighting' : 'dug in') + suppressed;
+    if (alive.some((u) => u.target && u.combat && u.target.alive)) return 'fighting' + suppressed;
     if (this.order.kind === 'retreat') return 'falling back';
     if (alive.some((u) => u.route.length)) return 'moving';
     if (this.order.kind === 'attack') return 'attacking';

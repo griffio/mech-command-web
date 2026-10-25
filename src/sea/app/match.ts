@@ -8,7 +8,8 @@
 // and every point lost; a side loses when its tickets run out, or when the other side holds every point.
 //
 // Infantry are slow and keep to land: a Karnov airlifts them (airlift.ts). Infantry that stand still a while dig in
-// behind sandbags, and are much harder to hit. Supply trucks build forward bases where squads come back, reinforce and
+// behind sandbags, and are much harder to hit. Fire pins soldiers down (suppression.ts): pinned, they don't count
+// toward taking a point. Supply trucks build forward bases where squads come back, reinforce and
 // refit nearer the front (logistics.ts).
 import type { Scenario, ScenarioSide } from '../../assets';
 import { PLAYER_PAINT, paintFromMission, type PaintScheme } from '../../paint.ts';
@@ -202,7 +203,7 @@ export class Match {
   private capture(dt: number): void {
     const counts = this.points.map(() => [0, 0] as [number, number]);
     for (const u of this.world.units) {
-      if (!u.alive || !u.combat || u.embarked || (u.team !== 0 && u.team !== 1)) continue;
+      if (!u.alive || !u.combat || u.embarked || u.pinned || (u.team !== 0 && u.team !== 1)) continue;
       this.points.forEach((p, i) => {
         if (Math.hypot(u.x - p.x, u.z - p.z) <= p.radius) counts[i]![u.team]!++;
       });
@@ -256,7 +257,9 @@ export class Match {
       for (const squad of side.squads) {
         const alive = squad.alive;
         const still = squad.isInfantry && !squad.airborne && alive.every((u) => !u.route.length && !u.embarked);
-        squad.stillFor = still ? squad.stillFor + dt : 0;
+        // Pinned down, they can't dig in (but a squad already dug in stays so).
+        const pinned = alive.some((u) => u.pinned);
+        squad.stillFor = still ? squad.stillFor + (pinned && !squad.dugIn ? 0 : dt) : 0;
         const dug = still && squad.stillFor >= DIG_IN_S;
         if (dug === squad.dugIn) continue;
         squad.dugIn = dug;
