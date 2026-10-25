@@ -1,5 +1,5 @@
-// Airlift: MC2's Karnov VTOL (tgl/karnov, with its hover, landing and take-off animations) flies an infantry squad from
-// wherever it is to where it's sent. It lifts off from the squad's base, lands by the squad, takes it aboard, flies
+// Airlift: MC2's Karnov VTOL (tgl/karnov, with its hover, landing and take-off animations) flies an infantry squad (or
+// a squad of trucks or tracked vehicles, see Squad.airliftable) from wherever it is to where it's sent. It lifts off from the squad's base, lands by the squad, takes it aboard, flies
 // over everything at a safe height, sets it down and goes home. Infantry are slow and keep to land, so this is how they
 // cross water or reach a far point in time. One flight per squad; the Karnov can't be shot down, and the squad can't be
 // hurt while aboard.

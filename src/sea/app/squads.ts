@@ -40,9 +40,13 @@ export class Squad {
     return alive.length > 0 && alive.every((u) => u.supply !== null);
   }
 
-  /** The Karnov can carry it: infantry, or a supply truck on its cargo arm. */
+  /**
+   * The Karnov can carry it: what keeps to land and fords (infantry, a supply truck, tracked vehicles like the LRM
+   * carrier), so can be cut off by water. Mechs wade and hovercraft cross it.
+   */
   get airliftable(): boolean {
-    return this.isInfantry || this.isLogistics;
+    const alive = this.alive;
+    return alive.length > 0 && alive.every((u) => u.kind === 'infantry' || (u.kind === 'vehicle' && u.moveClass === 'ground'));
   }
 
   /** Everyone left in it is on foot (it can dig in, and be airlifted). */

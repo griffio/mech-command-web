@@ -128,7 +128,9 @@ AI commander.
   just send it somewhere it can't walk to. The Karnov lifts off from the base,
   comes in on its own landing animation, hovers with its cargo arm down while the
   squad boards, and sets it down at the other end. It can't be shot down, and the
-  squad can't be hurt while aboard.
+  squad can't be hurt while aboard. It carries supply trucks and tracked vehicles
+  the same way: the Liao base is on an island of its own, so its LRM carriers
+  fly to the fight.
 - **Digging in.** Infantry that stand still for 8 seconds dig in behind
   sandbags (MC2's sandbag bunker) and are much harder to hit until they move:
   mechs take ground fast, infantry are flown in to hold it.
@@ -196,7 +198,8 @@ AI commander.
 
 The AI sends most of its squads at the point it can take next, holds the
 one it must keep with the rest, stands its LRM carriers off behind the attack,
-flies its infantry to far or cut-off points, and pulls badly hurt squads back to
+flies its infantry to far or cut-off points (and its vehicles to cut-off ones),
+and pulls badly hurt squads back to
 reinforce. Its Karnovs set infantry down out of sight of every enemy it has seen
 in the last minute, and well clear of any point you hold or have units in (the
 HUD shows it those counts, as it shows you); if the landing zone turns hot on

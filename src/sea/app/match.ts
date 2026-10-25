@@ -7,7 +7,8 @@
 // moves it toward you (an enemy's point goes neutral first, losing its owner tickets). Tickets go with every unit lost
 // and every point lost; a side loses when its tickets run out, or when the other side holds every point.
 //
-// Infantry are slow and keep to land: a Karnov airlifts them (airlift.ts). Infantry that stand still a while dig in
+// Infantry are slow and keep to land: a Karnov airlifts them (airlift.ts), and trucks and tracked vehicles across
+// water. Infantry that stand still a while dig in
 // behind sandbags, and are much harder to hit. Fire pins soldiers down (suppression.ts): pinned, they don't count
 // toward taking a point. Supply trucks build forward bases where squads come back, reinforce and
 // refit nearer the front (logistics.ts).
@@ -692,8 +693,9 @@ export class CommanderAI {
     const [tx, tz] = [x + (Math.random() - 0.5) * 30, z + (Math.random() - 0.5) * 30];
     const far = c && Math.hypot(c[0] - tx, c[1] - tz) > AI_AIRLIFT_M;
     const unreachable = c && this.world.grids && !this.world.grids.ground.connected(c[0], c[1], tx, tz);
-    // Falling back flies only when there's no way home on foot, and straight home.
-    if (squad.isInfantry && c && (unreachable || (far && !retreat))) {
+    // Falling back flies only when there's no way home on foot, and straight home. Vehicles drive whatever the distance,
+    // and fly only across water (the LRM carriers, from the Liao base's island).
+    if (squad.airliftable && c && (unreachable || (squad.isInfantry && far && !retreat))) {
       const lz = retreat ? { at: [tx, tz] as [number, number], safe: true } : this.landingZone(c, tx, tz);
       // A far goal is worth the flight only to a safe spot that saves a good walk; one out of reach on foot, to the
       // clearest spot there is.
