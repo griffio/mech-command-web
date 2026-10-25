@@ -26,6 +26,7 @@ import { Music } from './app/music';
 import { Notice } from './app/notice';
 import { Sound } from './app/sound';
 import type { Squad } from './app/squads';
+import { CALL_IN_NAMES, CALL_INS, type CallIn } from './app/support';
 import { UnitBars } from './app/unit-bars';
 import { PLAYER_TEAM, World, type SeaUnit } from './app/world';
 
@@ -337,6 +338,13 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     if (p.cancelled || p.handled || Math.hypot(e.clientX - p.x, e.clientY - p.y) > SLOP_PX) return;
     const hit = pickAt(e.clientX, e.clientY);
     if (!hit) return;
+    // With Artillery or Air strike pressed, the tap (on the ground or a unit) is where the strike lands.
+    if (mode === 'artillery' || mode === 'airstrike') {
+      const [x, z] = Array.isArray(hit) ? hit : [hit.x, hit.z];
+      const why = world.match?.support?.call(PLAYER_TEAM, mode, x, z);
+      if (why) callouts?.refused(why, null);
+      return setMode(null);
+    }
     if (Array.isArray(hit)) {
       // With Airlift pressed, the tap is where the Karnov drops the selected infantry; with Build FOB, where the
       // selected truck builds a forward base.
@@ -354,20 +362,25 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
   const build = document.getElementById('cmd-build') as HTMLButtonElement;
   // Airlift and Build FOB are modes for the next tap on the ground (pressing one lets go of the other): while one waits,
   // the notice says what to tap, and for a forward base red rings show where it can't go.
-  let mode: 'airlift' | 'build' | null = null;
+  let mode: 'airlift' | 'build' | CallIn | null = null;
+  const strikeButtons = new Map(CALL_INS.map((c) => [c, document.getElementById(`cmd-${c}`) as HTMLButtonElement]));
   const names = (pick: (q: Squad) => boolean) => [...world.selectedSquads].filter(pick).map((q) => q.name).join(' and ');
   function setMode(next: typeof mode): void {
     if (next === mode) return;
     mode = next;
     airlift.setAttribute('aria-pressed', String(mode === 'airlift'));
     build.setAttribute('aria-pressed', String(mode === 'build'));
+    for (const [call, button] of strikeButtons) button.setAttribute('aria-pressed', String(mode === call));
+    const strike = mode === 'artillery' || mode === 'airstrike' ? world.match?.support?.stats(mode) : null;
     void world.match?.logistics?.showNoBuild(mode === 'build' ? PLAYER_TEAM : null);
     notice.hint(
       mode === 'airlift'
         ? `Tap where the Karnov should set ${names((q) => q.airliftable && !q.airborne)} down`
         : mode === 'build'
           ? `Tap where ${names((q) => q.isLogistics)} should build a forward base, outside the red rings`
-          : null,
+          : strike && mode
+            ? `Tap where the ${CALL_IN_NAMES[mode as CallIn].toLowerCase()} should land, where your squads can see: it hits everything within ${strike.minorRange} m, yours too`
+            : null,
     );
   }
   airlift.addEventListener('click', () => {
@@ -383,6 +396,19 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     sound?.effect(mode === 'build' ? 'off' : 'on');
     setMode(mode === 'build' ? null : 'build');
   });
+  // Artillery and Air strike: a mode for the next tap, once the strike is ready.
+  for (const [call, button] of strikeButtons) {
+    button.addEventListener('click', () => {
+      const support = world.match?.support;
+      if (!support) return;
+      if (mode !== call) {
+        const wait = support.readyIn(PLAYER_TEAM, call);
+        if (wait > 0) return callouts?.refused(`${CALL_IN_NAMES[call]} is ready in ${Math.ceil(wait)} s`, null);
+      }
+      sound?.effect(mode === call ? 'off' : 'on');
+      setMode(mode === call ? null : call);
+    });
+  }
   // Airlift is offered while the selection has something the Karnov can carry; Build FOB while it has a supply truck.
   const offer = (button: HTMLButtonElement, on: boolean, which: typeof mode) => {
     if (button.hidden === on) button.hidden = !on;
@@ -392,6 +418,17 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     const squads = [...world.selectedSquads];
     offer(airlift, !!world.match?.airlift.available && squads.some((q) => q.airliftable && !q.airborne), 'airlift');
     offer(build, !!world.match?.logistics && squads.some((q) => q.isLogistics && !q.airborne), 'build');
+    // A strike's button shows how long until it's ready.
+    const support = world.match?.support;
+    for (const [call, button] of strikeButtons) {
+      const on = !!support?.available(call);
+      if (button.hidden === on) button.hidden = !on;
+      if (!support || !on) continue;
+      const wait = Math.ceil(support.readyIn(PLAYER_TEAM, call));
+      const label = wait > 0 ? `${CALL_IN_NAMES[call]} ${Math.floor(wait / 60)}:${String(wait % 60).padStart(2, '0')}` : CALL_IN_NAMES[call];
+      if (button.textContent !== label) button.textContent = label;
+      button.classList.toggle('waiting', wait > 0);
+    }
   }, 250);
   document.getElementById('cmd-all')!.addEventListener('click', () => world.selectAll());
   document.getElementById('cmd-stop')!.addEventListener('click', () => world.stopSelected());

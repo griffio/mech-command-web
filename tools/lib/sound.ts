@@ -32,6 +32,7 @@ export const RADIO = {
   vehicleDead: 'RADIO_VEHICLE_DEAD',
   buildingDead: 'RADIO_BUILDING_DEAD',
   sensorContact: 'RADIO_SENSOR_CONTACT',
+  underStrike: 'RADIO_UNDER_AIRSTRIKE',
 } as const;
 export type RadioMessage = keyof typeof RADIO;
 
@@ -49,6 +50,8 @@ export const BETTY = {
   baseDestroyed: 41,
   /** BETTY_REPAIR_GONE: a repair vehicle (or bay) out of refit points, which is what supply is. */
   supplyGone: 51,
+  /** BETTY_ARTILLERY_AVAILABLE: a strike can be called in. */
+  strikeReady: 22,
 } as const;
 export type BettyLine = keyof typeof BETTY;
 
@@ -60,18 +63,25 @@ export const EFFECTS = {
   off: 'sfx_int_click_off.wav',
   place: 'sfx_int_map_place.wav',
   alarm: 'sfx_alarm.wav',
+  /** sound.snd's "Air Strike": the engine plays it 5.5 s before a strike lands (code/artlry.cpp, INCOMING_AIRSTRIKE). */
+  incoming: 'sfx_airstrike.wav',
 } as const;
 export type Effect = keyof typeof EFFECTS;
 
 /** Things that blow up, and the explosion each gets. */
-export type Blast = 'mech' | 'vehicle' | 'structure' | 'crit';
-const BLAST_EFFECTS: Record<Exclude<Blast, 'structure'>, string> = {
+export type Blast = 'mech' | 'vehicle' | 'structure' | 'crit' | 'strike';
+const BLAST_EFFECTS: Record<Exclude<Blast, 'structure' | 'strike'>, string> = {
   mech: 'mech destruct explosion',
   vehicle: 'vehicle explosion',
   crit: 'mech critical hit explosion',
 };
 /** A building falling (sound.snd's "Building Collapses"): the forward base's tent. */
 const STRUCTURE_BITE = 73;
+/**
+ * A strike's bursts (sound.snd's "Mech Explode"). MC2's strikes make no sound of their own landing: their explosion
+ * object (519) is a rock, and their gosFX effect is silent.
+ */
+const STRIKE_BITE = 2;
 
 /** The hit explosion object (objects/*.fit) for each of the effects table's hit effects. */
 const HIT_OBJECTS: Record<string, string> = {
@@ -226,6 +236,8 @@ export function soundSet(
   }
   const structure = bite(STRUCTURE_BITE);
   if (structure) blasts.structure = structure;
+  const strike = bite(STRIKE_BITE);
+  if (strike) blasts.strike = strike;
 
   // Tunes, encoded by the converter to AAC (the originals are MS ADPCM, which browsers don't all play).
   const tunes = new Map<string, string>();

@@ -45,6 +45,8 @@ New:
   reinforce and refit, fog of war, infantry digging in, and the AI commander. `app/squads.ts`: squads (formation
   moves, attacks, strength). `app/airlift.ts`: the Karnov flying infantry, on its own landing and take-off clips.
   `app/suppression.ts`: fire landing near units suppresses them (worse aim) and pins soldiers down; its numbers.
+  `app/support.ts`: artillery and air strikes called in on a spot: readiness, the marker and ring, the fighter's
+  bombing run, and the bursts (the damage is `Battle.bombard`, on MC2's rule).
   `app/logistics.ts`: supply trucks and the forward bases they build, supply, and the services bases give.
   `app/match-hud.ts`: the ticket and point bar, the squad cards, and squad letters over the field.
   `app/sound.ts`: MC2's radio, Betty and interface sounds through Web Audio, queued by MC2's radio rules.

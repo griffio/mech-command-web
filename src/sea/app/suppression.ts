@@ -13,10 +13,10 @@ import type { SeaUnit, UnitKind } from './world';
 export const SUPPRESSION = {
   /** Suppression from a point of damage landing right by a soldier in the open (1 is full). */
   perDamage: 0.04,
-  /** By kind of shot: missiles' explosions, shells, a machine gun's burst, beams. */
-  weapon: { missile: 2, shell: 1, mg: 3, beam: 0.6 },
+  /** By kind of shot: missiles' explosions, shells, a machine gun's burst, beams, a called-in strike's bursts. */
+  weapon: { missile: 2, shell: 1, mg: 3, beam: 0.6, strike: 2 },
   /** How far from where it lands a shot suppresses, metres (fading to nothing there). */
-  radius: { missile: 10, shell: 6, mg: 5, beam: 4 },
+  radius: { missile: 10, shell: 6, mg: 5, beam: 4, strike: 30 },
   /** Share a unit takes, by kind. */
   takes: { infantry: 1, vehicle: 0.4, mech: 0.25, structure: 0 } satisfies Record<UnitKind, number>,
   /** Share soldiers take dug in, and in woods. */
@@ -35,16 +35,18 @@ export const SUPPRESSION = {
 };
 
 type Shot = keyof typeof SUPPRESSION.weapon;
-type WeaponDef = WeaponMount['def'];
+/** What suppress() needs of a weapon (a strike's burst passes as a missile). */
+type WeaponDef = Pick<WeaponMount['def'], 'kind' | 'damage' | 'name'>;
 
 function shotKind(w: WeaponDef): Shot {
+  if (w.name === 'strike') return 'strike';
   if (w.kind === 'missile') return 'missile';
   if (w.kind === 'energy') return 'beam';
   return w.name.toLowerCase().includes('mg') ? 'mg' : 'shell';
 }
 
 /** A shot from `by` lands at `at` (x, z): its enemies near there are suppressed. */
-export function suppress(units: readonly SeaUnit[], w: WeaponDef, x: number, z: number, by: SeaUnit, now: number, grid: MoveGrid | null): void {
+export function suppress(units: readonly SeaUnit[], w: WeaponDef, x: number, z: number, by: { team: number }, now: number, grid: MoveGrid | null): void {
   const kind = shotKind(w);
   const radius = SUPPRESSION.radius[kind];
   const amount = w.damage * SUPPRESSION.perDamage * SUPPRESSION.weapon[kind];

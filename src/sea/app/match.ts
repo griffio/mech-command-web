@@ -16,8 +16,10 @@ import { PLAYER_PAINT, paintFromMission, type PaintScheme } from '../../paint.ts
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import { bestRange } from '../sim/combat';
 import { Airlift } from './airlift';
+import type { Attacker } from './battle';
 import { FOB_RADIUS, Logistics, type ServicePoint } from './logistics';
 import { Squad } from './squads';
+import { CALL_INS, Support, type CallIn } from './support';
 import { PLAYER_TEAM, bearing, type SeaUnit, type World } from './world';
 
 /** Seconds for one unit to take a neutral point; more units are quicker, up to three times as quick. */
@@ -39,6 +41,8 @@ const DIG_IN_S = 8;
 const AI_AIRLIFT_M = 450;
 /** Bodies are cleared after this; wrecks after the second. */
 const CLEAR_INFANTRY_S = 4;
+/** What the AI wants under a strike before it calls one (see CommanderAI.callStrikes). */
+const STRIKE_WORTH: Record<CallIn, number> = { artillery: 4, airstrike: 6 };
 const CLEAR_WRECK_S = 150;
 
 export const TEAM_COLOR: Record<number, string> = { 0: '#4fa3ff', 1: '#ff5a4a' };
@@ -62,12 +66,15 @@ export interface CapturePoint {
 
 /** What happened, for the radio and the notices (the battle log has its own words for these, from onEvent). */
 export type MatchSignal =
-  | { kind: 'destroyed'; unit: SeaUnit; by: SeaUnit }
+  | { kind: 'destroyed'; unit: SeaUnit; by: Attacker }
   | { kind: 'captured' | 'lost'; point: CapturePoint; team: number }
   | { kind: 'ended'; winner: number }
   | { kind: 'fobBuilt' | 'fobLost'; team: number }
   /** A truck (its squad) or a forward base (squad null) has run out of supply. */
-  | { kind: 'outOfSupply'; team: number; squad: Squad | null };
+  | { kind: 'outOfSupply'; team: number; squad: Squad | null }
+  /** A side can call a strike again; a side has called one (`seen` by the player: theirs, or near their units). */
+  | { kind: 'strikeReady'; team: number; call: CallIn }
+  | { kind: 'strikeCalled'; team: number; call: CallIn; x: number; z: number; reach: number; seen: boolean };
 
 export interface Side {
   team: number;
@@ -92,6 +99,8 @@ export class Match {
   readonly airlift: Airlift;
   /** Supply trucks and forward bases, when the scenario has them. */
   logistics: Logistics | null = null;
+  /** Strikes the sides call in, when the scenario has them. */
+  support: Support | null = null;
   /** The sandbags dug-in squads shelter behind (null if the converter didn't export them). */
   private garrisonModel: GpuModel | null = null;
   private readonly sandbags = new Map<Squad, ModelInstance>();
@@ -139,6 +148,10 @@ export class Match {
       match.logistics = new Logistics(world, match, scenario.logistics, BASE_RADIUS);
       await match.logistics.load();
     }
+    if (scenario.support) {
+      match.support = new Support(world, match, scenario.support);
+      await match.support.load();
+    }
     for (const p of match.points) {
       match.pointRings.push(world.addMarker(match.ringModels.get(`${match.pointRings.length}:none`)!, p.x, p.z, 1));
       match.pointFlags.push(null);
@@ -183,6 +196,7 @@ export class Match {
     this.time += dt;
     this.airlift.update(dt);
     this.logistics?.update(dt);
+    this.support?.update(dt);
     this.capture(dt);
     this.garrison(dt);
     this.supply(dt);
@@ -193,7 +207,7 @@ export class Match {
   }
 
   /** A unit died: its side pays for it in tickets. */
-  private lost(u: SeaUnit, by: SeaUnit): void {
+  private lost(u: SeaUnit, by: Attacker): void {
     this.dead.set(u, this.time);
     const side = this.sides.find((s) => s.team === u.team);
     if (side) side.tickets -= ticketCost(u);
@@ -450,6 +464,7 @@ export class CommanderAI {
     const hold = this.match.frontier(this.team);
     const ready = side.squads.filter((q) => q.alive.length && q.respawnAt === null);
     for (const q of ready.filter((q) => q.isLogistics)) this.supplyRun(q);
+    this.callStrikes();
     const squads = ready.filter((q) => !q.isLogistics);
     const attackers = Math.ceil(squads.length * 0.65);
     squads
@@ -497,6 +512,38 @@ export class CommanderAI {
     if (!goal || !idle || Math.hypot(truck.x - goal.x, truck.z - goal.z) < 20) return;
     if (!this.world.grids?.ground.connected(truck.x, truck.z, goal.x, goal.z)) this.match.airliftSquad(squad, goal.x, goal.z);
     else squad.move(this.world, goal.x, goal.z);
+  }
+
+  /**
+   * Call in what strikes are ready, each on the enemies it sees bunched up most (worth a mech 3, a vehicle or a turret 2,
+   * a soldier 1, those within the strike's minor range half), when they're worth enough and none of its own are
+   * within its reach.
+   */
+  private callStrikes(): void {
+    const S = this.match.support;
+    if (!S) return;
+    for (const call of CALL_INS) {
+      const stats = S.stats(call);
+      if (!stats || S.readyIn(this.team, call) > 0) continue;
+      const seen = [...this.world.battle.seenBy(this.team)].filter((u) => u.alive && !u.embarked);
+      const own = this.world.units.filter((u) => u.team === this.team && u.alive && u.combat && !u.embarked);
+      const worth = (u: SeaUnit) => (u.kind === 'mech' ? 3 : u.kind === 'infantry' ? 1 : 2);
+      let best: SeaUnit | null = null;
+      let bestScore = STRIKE_WORTH[call];
+      for (const c of seen) {
+        if (own.some((o) => Math.hypot(o.x - c.x, o.z - c.z) <= stats.minorRange + 15)) continue;
+        let score = 0;
+        for (const e of seen) {
+          const d = Math.hypot(e.x - c.x, e.z - c.z);
+          if (d <= stats.minorRange) score += worth(e) * (d <= stats.majorRange ? 1 : 0.5);
+        }
+        if (score >= bestScore) {
+          bestScore = score;
+          best = c;
+        }
+      }
+      if (best) S.call(this.team, call, best.x, best.z);
+    }
   }
 
   /**

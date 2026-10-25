@@ -200,7 +200,15 @@ const VEHICLE_CLIPS = ['idle', 'walk', 'run', 'deploy'];
 export function walks(spec: ModelSpec): boolean {
   return spec.clips.some((c) => c.clip === 'walk' && c.file !== spec.base);
 }
-const KARNOV_CLIPS = ['hover', 'land', 'takeoff'];
+/**
+ * Aircraft whose clips carry their own flight (by appearance: its [Animation:N] in order): the Karnov's hover, landing
+ * and take-off, and the aerospace fighters' bombing run (MC2's air strikes).
+ */
+const AIRCRAFT_CLIPS: Record<string, string[]> = {
+  karnov: ['hover', 'land', 'takeoff'],
+  slayer: ['bombrun'],
+  shilone: ['bombrun'],
+};
 
 export interface ModelSpec {
   /** Output key and file stem: the appearance name, lower case. */
@@ -232,7 +240,7 @@ export function modelSpec(src: SourceData, appearance: string, kind: ModelSpec['
       if (file) clips.push({ clip: g.clip, gesture: g.gesture, file });
     }
   } else if (kind === 'vehicle') {
-    (appearance.toLowerCase() === 'karnov' ? KARNOV_CLIPS : VEHICLE_CLIPS).forEach((clip, n) => {
+    (AIRCRAFT_CLIPS[appearance.toLowerCase()] ?? VEHICLE_CLIPS).forEach((clip, n) => {
       const name = fit.str(`Animation:${n}`, 'AnimationName');
       const file = name ? src.actual(`tgl/${name}.ase`) : null;
       if (file) clips.push({ clip, gesture: -1, file });

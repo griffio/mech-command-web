@@ -1,6 +1,6 @@
 // Types and loaders for the files written by tools/convert.ts.
 import { Vector3 } from 'three';
-import type { AmmoDef, MechStats, VehicleStats, WeaponDef } from '../tools/lib/combat-data.ts';
+import type { AmmoDef, MechStats, StrikeStats, VehicleStats, WeaponDef } from '../tools/lib/combat-data.ts';
 
 export interface ImageRef {
   file: string;
@@ -94,11 +94,20 @@ export type {
   MechStats,
   RangeClass,
   SlotContent,
+  StrikeStats,
   VehicleLocation,
   VehicleStats,
   WeaponDef,
 } from '../tools/lib/combat-data.ts';
-export type { Scenario, ScenarioLogistics, ScenarioPoint, ScenarioSide, ScenarioSquad } from '../tools/lib/scenario.ts';
+export type {
+  Scenario,
+  ScenarioLogistics,
+  ScenarioPoint,
+  ScenarioSide,
+  ScenarioSquad,
+  ScenarioStrike,
+  ScenarioSupport,
+} from '../tools/lib/scenario.ts';
 export type { BettyLine, Blast, Cue, Effect, RadioMessage, SoundFile } from '../tools/lib/sound.ts';
 
 /** combat.json: the weapons and ammunition the map's units carry, and each unit type's armour and loadout. */
@@ -107,6 +116,8 @@ export interface CombatFile {
   ammo: Record<string, AmmoDef>;
   mechs: Record<string, MechStats>;
   vehicles: Record<string, VehicleStats>;
+  /** The scenarios' strikes, by MC2 strike file ("artbig"). */
+  strikes?: Record<string, StrikeStats>;
 }
 
 export const ASSET_ROOT = `${import.meta.env.BASE_URL}assets/`;

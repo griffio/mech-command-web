@@ -30,7 +30,7 @@ import {
   readMission,
   type ModelSpec,
 } from './lib/mission.ts';
-import { ComponentTable, readGunnery, readMechStats, readTurretStats, readVehicleStats, type MechStats, type VehicleStats } from './lib/combat-data.ts';
+import { ComponentTable, readGunnery, readMechStats, readStrike, readTurretStats, readVehicleStats, type MechStats, type VehicleStats } from './lib/combat-data.ts';
 import { buildModel, TextureLibrary } from './lib/model.ts';
 import { readScenarios, scenarioNeeds } from './lib/scenario.ts';
 import { missionTune, soundSet } from './lib/sound.ts';
@@ -293,6 +293,7 @@ json(`${mapDir}/combat.json`, {
   ammo: Object.fromEntries([...components.ammo].filter(([id]) => [...Object.values(mechStats), ...Object.values(vehicleStats)].some((s) => id in s.ammo))),
   mechs: mechStats,
   vehicles: vehicleStats,
+  strikes: Object.fromEntries(needs.strikes.filter((s) => src.has(`objects/${s}.fit`)).map((s) => [s, readStrike(src.fit(`objects/${s}.fit`))])),
 });
 json('manifest.json', { maps: [missionName] });
 

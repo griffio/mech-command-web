@@ -1,8 +1,8 @@
-// The battle's sounds: weapons firing, shots landing and units blowing up, each with MC2's sound for it
-// (tools/lib/sound.ts says which) as loud as MC2 plays it. A sound fades with its distance from what the camera looks
-// at, and with the camera's own distance (zoomed out, the fight is quieter), and is panned to the side of the screen
-// it's on. The player hears what their side can see: an unseen enemy's guns are silent, though its shots landing on
-// the player's units aren't. The player's squads fighting brings in the combat music.
+// The battle's sounds: weapons firing, shots landing, units blowing up and strikes coming in, each with MC2's sound
+// for it (tools/lib/sound.ts says which) as loud as MC2 plays it. A sound fades with its distance from what the camera
+// looks at, and with the camera's own distance (zoomed out, the fight is quieter), and is panned to the side of the
+// screen it's on. The player hears what their side can see: an unseen enemy's guns are silent, though its shots
+// landing on the player's units aren't. The player's squads fighting brings in the combat music.
 import type { Camera } from '../render/camera';
 import type { Battle, Noise } from './battle';
 import type { Music } from './music';
@@ -52,10 +52,11 @@ export class BattleSounds {
       if (own(n.on)) this.music?.fighting();
       if (!heard(n.on) && !heard(n.by)) return;
       cue = file.weapons?.[n.weapon]?.hit;
-    } else {
+    } else if (n.kind === 'blast') {
       if (!heard(n.on)) return;
       cue = file.blasts?.[n.blast];
-    }
+    } else if (n.kind === 'burst') cue = file.blasts?.strike;
+    else cue = file.effects.incoming ? { file: file.effects.incoming, gain: 1 } : undefined;
     if (!cue) return;
     const d = Math.hypot(n.at[0] - this.x, n.at[2] - this.z, this.height * HEIGHT_SHARE);
     const gain = (d <= NEAR_M ? 1 : Math.max(0, 1 - (d - NEAR_M) / (FAR_M - NEAR_M)) ** 2) * (n.kind === 'impact' ? IMPACT_SHARE : 1);

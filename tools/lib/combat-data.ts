@@ -240,6 +240,48 @@ export function readVehicleStats(fit: Fit, components: ComponentTable): VehicleS
   };
 }
 
+/** An air or artillery strike (objects/artbig.fit, artsml.fit: [Artillery], code/artlry.cpp), in seconds and metres. */
+export interface StrikeStats {
+  /** Seconds from the call to the strike landing. */
+  timeToImpact: number;
+  /** Damage of each hit. */
+  damage: number;
+  /** Units within the major range take the major number of hits, those within the minor range the minor number. */
+  majorRange: number;
+  majorHits: number;
+  minorRange: number;
+  minorHits: number;
+  /** Where its explosions burst about the spot, and when (the engine reads but doesn't use these; the game does). */
+  explosions: { delay: number; x: number; z: number }[];
+  /** Up to this far further each way, at random. */
+  scatter: number;
+}
+
+export function readStrike(fit: Fit): StrikeStats {
+  const n = fit.num('Artillery', 'NumExplosions', 0);
+  const explosions: StrikeStats['explosions'] = [];
+  // NumExplosions counts beyond the first: ARTBig lists 13, numbered 0..12.
+  for (let i = 0; i <= n; i++) {
+    if (fit.get('Artillery', `ExplosionDelay${i}`) === undefined) continue;
+    explosions.push({
+      delay: fit.num('Artillery', `ExplosionDelay${i}`),
+      x: fit.num('Artillery', `ExplosionOffsetX${i}`),
+      // MC2's y is north; the game's z is south.
+      z: -fit.num('Artillery', `ExplosionOffsetY${i}`),
+    });
+  }
+  return {
+    timeToImpact: fit.num('Artillery', 'NominalTimeToImpact', 7),
+    damage: fit.num('Artillery', 'NominalDamage'),
+    majorRange: fit.num('Artillery', 'nominalMajorRange'),
+    majorHits: fit.num('Artillery', 'nominalMajorHits'),
+    minorRange: fit.num('Artillery', 'nominalMinorRange'),
+    minorHits: fit.num('Artillery', 'nominalMinorHits'),
+    explosions,
+    scatter: fit.num('Artillery', 'ExplosionRandomOffsetX', 0),
+  };
+}
+
 /**
  * A turret's object file ([TurretData]): its damage level as structure on every side (no armour), its weapons
  * (WeaponType, WeaponType1, ...) with ammunition that never runs out, and its gunner's skill.

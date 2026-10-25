@@ -1,17 +1,19 @@
 // What the player hears and reads as a match goes. Their squads answer orders over the radio in their pilots' voices
-// (MC2's lines: acknowledged, can't do that, can't get there) and call out contacts, attacks, being pinned down,
-// crippling damage, kills and finished refits. Betty announces points taken, forward bases under attack or lost,
-// supply run out, and the result, over the win or lose tune. Refused orders and alerts also show in the middle of the
-// screen, with MC2's buzz or alarm.
+// (MC2's lines: acknowledged, can't do that, can't get there) and call out contacts, attacks, being pinned down, enemy
+// strikes coming in, crippling damage, kills and finished refits. Betty announces points taken, forward bases under
+// attack or lost, supply run out, strikes ready, and the result, over the win or lose tune. Refused orders and alerts
+// also show in the middle of the screen, with MC2's buzz or alarm.
 //
 // MC2 says these lines when it does (code/tacordr.cpp, warrior.cpp, mech.cpp, mover.cpp); how often a squad repeats
 // itself is this project's own choice, so that a long fight isn't a running commentary.
 import type { RadioMessage } from '../../assets';
+import type { Attacker } from './battle';
 import type { Fob } from './logistics';
 import type { Match, MatchSignal } from './match';
 import type { Music } from './music';
 import type { Notice } from './notice';
 import type { Sound } from './sound';
+import { CALL_IN_NAMES } from './support';
 import type { Squad } from './squads';
 import { PLAYER_TEAM, type OrderReport, type SeaUnit, type World } from './world';
 
@@ -139,10 +141,35 @@ export class Callouts {
         if (!own) return;
         this.notice.show(s.squad ? `${s.squad.name} is empty: send it to base to fill up` : 'A forward base is out of supply', 'alert');
         return this.sound?.announce('supplyGone');
+      case 'strikeReady':
+        if (!own) return;
+        this.notice.show(`${CALL_IN_NAMES[s.call]} ready`);
+        return this.sound?.announce('strikeReady');
+      case 'strikeCalled':
+        return this.strikeCalled(s);
     }
   }
 
-  private destroyed(unit: SeaUnit, by: SeaUnit): void {
+  /** The player's strike on its way; or the enemy's, coming down near the player's units. */
+  private strikeCalled(s: Extract<MatchSignal, { kind: 'strikeCalled' }>): void {
+    const name = CALL_IN_NAMES[s.call];
+    if (s.team === PLAYER_TEAM) {
+      this.notice.show(`${name} on the way: it hits everything inside the ring`);
+      return this.sound?.effect('place');
+    }
+    if (!s.seen) return;
+    this.notice.show(`Incoming enemy ${name.toLowerCase()}! Get clear of the red ring`, 'alert');
+    this.sound?.effect('alarm');
+    // The squad of the player's nearest it says so, if it's in the way.
+    const inReach = this.match
+      .side(PLAYER_TEAM)
+      .squads.map((q) => ({ q, c: q.centroid() }))
+      .filter((e): e is { q: Squad; c: [number, number] } => e.c !== null && Math.hypot(e.c[0] - s.x, e.c[1] - s.z) <= s.reach)
+      .sort((a, b) => Math.hypot(a.c[0] - s.x, a.c[1] - s.z) - Math.hypot(b.c[0] - s.x, b.c[1] - s.z));
+    if (inReach[0]) this.say(inReach[0].q, 'underStrike');
+  }
+
+  private destroyed(unit: SeaUnit, by: Attacker): void {
     const q = unit.squad;
     if (unit.team === PLAYER_TEAM) {
       if (!q) return;

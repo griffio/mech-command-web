@@ -213,6 +213,12 @@ pre#perf-status {
   color: #fff;
 }
 
+/* A strike still on its way back. */
+#commands button.waiting {
+  color: #a7adb1;
+  font-variant-numeric: tabular-nums;
+}
+
 .perf-running #commands {
   pointer-events: none;
 }

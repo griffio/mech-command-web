@@ -50,6 +50,26 @@ export interface Scenario {
   /** Object file of the prop dug-in infantry shelter behind ("sandbagbunker"). */
   garrison: string;
   logistics?: ScenarioLogistics;
+  /** Strikes each side can call in. */
+  support?: ScenarioSupport;
+}
+
+/** A strike a side calls in on a spot, then waits for again. */
+export interface ScenarioStrike {
+  /** MC2's strike (objects/<strike>.fit: its damage, reach and time to arrive): "artsml", "artbig". */
+  strike: string;
+  /** Seconds into the match before the first, and between one and the next. */
+  first: number;
+  cooldown: number;
+  /** The appearance of the aerospace fighter that flies the bombing run ("slayer"); none for artillery. */
+  bomber?: string;
+}
+
+export interface ScenarioSupport {
+  /** The appearance spinning on the spot until it lands ("airstrikemarker"). */
+  marker: string;
+  artillery?: ScenarioStrike;
+  airstrike?: ScenarioStrike;
 }
 
 /** Supply trucks and the forward bases they build (all object file names). */
@@ -77,13 +97,28 @@ export function readScenarios(map: string, dir = 'scenarios'): Scenario[] {
 }
 
 /** Every unit type, prop object and bare appearance the scenarios use. */
-export function scenarioNeeds(scenarios: Scenario[]): { units: string[]; props: string[]; appearances: string[]; voices: string[] } {
+export function scenarioNeeds(scenarios: Scenario[]): {
+  units: string[];
+  props: string[];
+  appearances: string[];
+  voices: string[];
+  strikes: string[];
+} {
   const units = new Set<string>();
   const props = new Set<string>();
   const appearances = new Set<string>();
   const voices = new Set<string>();
+  const strikes = new Set<string>();
   for (const s of scenarios) {
     if (s.transport) appearances.add(s.transport.toLowerCase());
+    if (s.support) {
+      appearances.add(s.support.marker.toLowerCase());
+      for (const call of [s.support.artillery, s.support.airstrike]) {
+        if (!call) continue;
+        strikes.add(call.strike.toLowerCase());
+        if (call.bomber) appearances.add(call.bomber.toLowerCase());
+      }
+    }
     if (s.garrison) props.add(s.garrison.toLowerCase());
     if (s.logistics) {
       units.add(s.logistics.truck.toLowerCase());
@@ -99,5 +134,5 @@ export function scenarioNeeds(scenarios: Scenario[]): { units: string[]; props: 
       }
     }
   }
-  return { units: [...units], props: [...props], appearances: [...appearances], voices: [...voices] };
+  return { units: [...units], props: [...props], appearances: [...appearances], voices: [...voices], strikes: [...strikes] };
 }

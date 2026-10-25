@@ -19,7 +19,7 @@ import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import type { SeaRenderer } from '../render/sea-renderer';
 import { parseGlb, type ModelData } from '../models/glb';
 import { AFFINE_FLOATS, Animator, mulAffine, placement, restPose } from '../models/pose';
-import type { VehicleStats } from '../../assets.ts';
+import type { StrikeStats, VehicleStats } from '../../assets.ts';
 import { MechCombat, VehicleCombat } from '../sim/combat';
 import { MoveGrid, type MoveClass } from '../sim/move-grid';
 import type { Terrain } from '../sim/terrain/terrain';
@@ -366,6 +366,7 @@ export class World {
   /** Rest poses of marker props (flags), by model. */
   private readonly markerRest = new Map<GpuModel, Float32Array>();
   private readonly ringFrame = new Float32Array(AFFINE_FLOATS);
+  private readonly markerFrame = new Float32Array(AFFINE_FLOATS);
 
   private constructor(
     private readonly sea: SeaRenderer,
@@ -594,19 +595,34 @@ export class World {
    */
   addMarker(model: GpuModel, x: number, z: number, scale = this.scale, rotation = 0): ModelInstance {
     const inst = this.sea.models.addInstance(model);
+    this.placeMarker(inst, x, z, rotation, scale);
+    inst.radius = Math.max(inst.radius, scale === this.scale ? model.radius : scale);
+    return inst;
+  }
+
+  /** Put a marker (addMarker) somewhere, turned `rotation` degrees: a strike's marker spins. */
+  placeMarker(inst: ModelInstance, x: number, z: number, rotation: number, scale = this.scale): void {
+    const model = inst.model;
     const y = this.terrain.heightAt(x, z);
-    const frame = new Float32Array(AFFINE_FLOATS);
-    placement(frame, x, Math.max(y, 0) + 0.3, z, (rotation * Math.PI) / 180, scale);
+    placement(this.markerFrame, x, Math.max(y, 0) + 0.3, z, (rotation * Math.PI) / 180, scale);
     const rest = this.markerRest.get(model);
     for (let k = 0; k < model.nodeCount; k++) {
-      if (rest) mulAffine(inst.matrices, k * AFFINE_FLOATS, frame, 0, rest, k * AFFINE_FLOATS);
-      else inst.matrices.set(frame, k * AFFINE_FLOATS);
+      if (rest) mulAffine(inst.matrices, k * AFFINE_FLOATS, this.markerFrame, 0, rest, k * AFFINE_FLOATS);
+      else inst.matrices.set(this.markerFrame, k * AFFINE_FLOATS);
     }
     inst.center[0] = x;
     inst.center[1] = y;
     inst.center[2] = z;
-    inst.radius = Math.max(inst.radius, scale === this.scale ? model.radius : scale);
-    return inst;
+  }
+
+  /** The scale MC2's models are drawn at (they're in its world units), times `times`. */
+  modelScale(times = 1): number {
+    return this.scale * times;
+  }
+
+  /** An MC2 strike's numbers (objects/<name>.fit), if the converter exported them. */
+  strikeStats(name: string): StrikeStats | null {
+    return this.combatFile.strikes?.[name.toLowerCase()] ?? null;
   }
 
   replaceMarker(old: ModelInstance, model: GpuModel, x: number, z: number, scale?: number): ModelInstance {

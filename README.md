@@ -91,6 +91,8 @@ it. A second tap on a selected squad's card looks at it, and a tap on a point in
 the top bar looks at the point. **Stop** halts them (and drops an attack order)
 and **Run** makes mechs run. **Airlift** and **Build FOB** appear when the
 selection has infantry or a supply truck: press one, then tap the ground.
+**Artillery** and **Air strike** call in a strike: press one, then tap where it
+should land (they show how long until they're ready again).
 **Music** and **Sound** (top right) turn each on or off.
 
 ### Advance and Secure
@@ -142,6 +144,19 @@ AI commander.
   letters show it, and a squad pinned down says so on the radio. So the Catapult
   and the LRM carriers earn their keep even when they miss: pin the defenders,
   then close in.
+- **Artillery and air strikes.** Each side can call in MC2's strikes
+  (`objects/artsml.fit`, `artbig.fit`): artillery, ready every 2 minutes, and an
+  air strike, every 4, flown by MC2's Slayer aerospace fighter on its own
+  bombing-run animation. Press one and tap a spot one of your squads can see.
+  MC2's marker spins there and a ring shows the strike's reach; 7 seconds later
+  it lands, as MC2's do, and every unit within 80 m takes MC2's hits (within
+  25 m, more of them): artillery 8 damage a hit, the air strike 15. It hits your
+  units too, and dug-in soldiers take half. The engine's incoming whoosh plays
+  5.5 seconds out and the fighter dives in 2.5 seconds out. The bursts pin down
+  soldiers nearby. When the enemy calls one near your units you get the red ring,
+  a warning and the alarm, and the squad in the way calls it in: run. The AI
+  calls its strikes on your units bunched up (a mech counts most), never where
+  its own would be hit.
 - **Forward bases.** Each side has a logistics squad: MC2's repair truck,
   carrying its 500 refit points as supply. Select it, press **Build FOB** and
   tap a spot (red rings show where it can't go: within 300 m of your main base

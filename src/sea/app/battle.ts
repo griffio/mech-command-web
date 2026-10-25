@@ -3,10 +3,11 @@
 // they do in MC2 (lasers at once, shells and missiles at their speeds) and do their damage when they land. Destroyed
 // units fall, blow up and burn.
 import type { CombatEffects } from '../render/fx/combat-effects';
-import type { Blast, MechLocation } from '../../assets';
-import { ATTACK_RADIUS, COMBAT_TICK, FIRE_ARC, SIGHT_RANGE, arcOf, bestRange, inRange, type HitReport, type WeaponMount } from '../sim/combat';
+import type { Blast, MechLocation, StrikeStats } from '../../assets';
+import { ATTACK_RADIUS, COMBAT_TICK, FIRE_ARC, SIGHT_RANGE, arcOf, bestRange, inRange, type Arc, type HitReport, type WeaponMount } from '../sim/combat';
 import { Rng } from '../sim/rng';
 import { aimShare, settle, suppress, SUPPRESSION } from './suppression';
+import type { Squad } from './squads';
 import { PLAYER_TEAM, bearing, wrapDegrees, type SeaUnit, type World } from './world';
 
 type V3 = [number, number, number];
@@ -44,11 +45,29 @@ const HIT_NODE: Record<string, string> = {
   'left arm': 'weapon_leftarm', 'right arm': 'weapon_rightarm', 'left leg': 'joint_llleg', 'right leg': 'joint_rlleg',
 };
 
+/** Who did the damage: a unit, or a strike a side called in (which has no unit of its own). */
+export interface Attacker {
+  team: number;
+  name: string;
+  x: number;
+  z: number;
+  squad?: Squad | null;
+}
+
 /** A sound the fight makes, and where (the battle's sounds pick MC2's for it). */
 export type Noise =
   | { kind: 'fire'; weapon: number; at: V3; by: SeaUnit }
   | { kind: 'impact'; weapon: number; at: V3; on: SeaUnit; by: SeaUnit }
-  | { kind: 'blast'; blast: Blast; at: V3; on: SeaUnit };
+  | { kind: 'blast'; blast: Blast; at: V3; on: SeaUnit }
+  /** A strike on its way (5.5 s out, as the engine plays it), and each of its bursts as it lands. */
+  | { kind: 'incoming' | 'burst'; at: V3 };
+
+/** The arcs a strike's hits come from: any side, at random. */
+const ARCS: Arc[] = ['front', 'left', 'right', 'rear'];
+/** The scenarios' rule: dug-in soldiers take this share of a strike's damage (they're behind sandbags). */
+const STRIKE_DUG_IN = 0.5;
+/** A strike's burst suppresses as a shot of this much damage (suppression.ts gives strikes their own reach). */
+const BURST_SUPPRESSION = { kind: 'missile', damage: 10, name: 'strike' } as const;
 
 /** Damage on its way: it lands at `at` (game time) unless its target is already gone. */
 interface Payload {
@@ -100,9 +119,9 @@ export class Battle {
   /** Shots land and show, but do no damage (the battle survey's steady fight). */
   immortal = false;
   /** Called when a unit is destroyed, and by whom (a match charges its side tickets, and the radio reports kills). */
-  onDestroyed: (u: SeaUnit, by: SeaUnit) => void = () => {};
+  onDestroyed: (u: SeaUnit, by: Attacker) => void = () => {};
   /** Called when a shot damages a unit that survives it (the radio: under attack). */
-  onHit: (u: SeaUnit, by: SeaUnit) => void = () => {};
+  onHit: (u: SeaUnit, by: Attacker) => void = () => {};
   /** Called for each weapon fired, shot landed and unit blown up (the battle's sounds). */
   onNoise: (n: Noise) => void = () => {};
   /** Decide the battle when one side is wiped out (a match decides its own). */
@@ -403,7 +422,48 @@ export class Battle {
     return size * cover * (t.squad?.dugIn ? INFANTRY_HIT.dugIn : 1) * (t.pinned ? SUPPRESSION.prone : 1);
   }
 
-  private destroyed(t: SeaUnit, by: SeaUnit, report: HitReport): void {
+  /**
+   * A strike lands at (x, z) (code/artlry.cpp, ArtilleryType::handleCollision): every unit on the ground within its minor
+   * range takes its minor number of hits, within its major range the major number, each of its damage, on the location
+   * a hit from a side at random would land. Turrets and tents are hit only within the major range, aircraft not at all.
+   * It hits friend and foe alike.
+   */
+  bombard(x: number, z: number, s: StrikeStats, by: Attacker): void {
+    if (this.immortal) return;
+    for (const t of [...this.world.units]) {
+      if (!t.alive || !t.combat || t.embarked || t.altitude > 0) continue;
+      const r = Math.hypot(t.x - x, t.z - z);
+      if (r > s.minorRange || (t.kind === 'structure' && r > s.majorRange)) continue;
+      const hits = r <= s.majorRange ? s.majorHits : s.minorHits;
+      const damage = s.damage * (t.kind === 'infantry' && t.squad?.dugIn ? STRIKE_DUG_IN : 1);
+      for (let i = 0; i < hits && t.alive; i++) {
+        const arc = ARCS[Math.floor(this.rng.next() * ARCS.length)]!;
+        const report = t.combat.takeHit(t.combat.hitLocation(arc, this.rng), damage, this.rng);
+        if (!t.alive) this.destroyed(t, by, report);
+        else {
+          this.wounded(t, report, [t.x, t.instance.center[1], t.z]);
+          this.onHit(t, by);
+        }
+      }
+    }
+  }
+
+  /** One of a strike's bursts: the explosion, its sound, and heads down about it (everyone's: it's no one's shot). */
+  burst(x: number, z: number, scale: number): void {
+    const ground = this.world.terrain.heightAt(x, z);
+    const at: V3 = [x, Math.max(ground, 0) + 1.5, z];
+    this.fx.explosion(at, scale);
+    this.fx.groundHit(at, scale, ground < 0);
+    this.onNoise({ kind: 'burst', at });
+    suppress(this.world.units, BURST_SUPPRESSION, x, z, { team: -1 }, this.time, this.world.grid);
+  }
+
+  /** A strike is on its way to (x, z): for the battle's sounds. */
+  incoming(x: number, z: number): void {
+    this.onNoise({ kind: 'incoming', at: [x, Math.max(this.world.terrain.heightAt(x, z), 0), z] });
+  }
+
+  private destroyed(t: SeaUnit, by: Attacker, report: HitReport): void {
     t.die(arcOf(t.x, t.z, t.rotation, by.x, by.z) === 'front');
     this.world.unitDied(t);
     this.onDestroyed(t, by);
@@ -418,7 +478,7 @@ export class Battle {
     this.onNoise({ kind: 'blast', blast: t.kind === 'mech' ? 'mech' : t.kind === 'structure' ? 'structure' : 'vehicle', at, on: t });
     if (report.exploded) this.fx.explosion(at, 0.8);
     this.wrecks.push({ unit: t, since: this.time, nextPuff: this.time + 0.3, drawn: false });
-    const side = (u: SeaUnit) => (u.team === PLAYER_TEAM ? '' : 'enemy ');
+    const side = (u: { team: number }) => (u.team === PLAYER_TEAM ? '' : 'enemy ');
     this.onEvent(`${capital(side(by))}${by.name} destroyed ${side(t)}${t.name} (${t.combat!.dead})`, by.team);
   }
 

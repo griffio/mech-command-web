@@ -5,6 +5,20 @@
   "pointRadius": 55,
   "transport": "karnov",
   "garrison": "sandbagbunker",
+  "support": {
+    "marker": "airstrikemarker",
+    "artillery": {
+      "strike": "artsml",
+      "first": 60,
+      "cooldown": 120
+    },
+    "airstrike": {
+      "strike": "artbig",
+      "bomber": "slayer",
+      "first": 150,
+      "cooldown": 240
+    }
+  },
   "points": [
     {
       "name": "Airfield",
