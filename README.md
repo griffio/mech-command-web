@@ -15,14 +15,20 @@ code: the original data is converted offline into glTF, WebP, PNG, JSON and AAC.
 
 ![Alpha lance's lasers on a Liao lance among the airfield's buildings, with the match's HUD: tickets and capture points along the top, squad cards and orders along the bottom](docs/screenshots/match.jpg)
 
+On an iPad Air M2 (taken with the dev server's **Capture** button, so without the HUD):
+
+| | | |
+|---|---|---|
+| ![Alpha lance closing on a Liao lance at the Ridge, smoke trailing from the damaged](docs/screenshots/ipad-ridge.jpg) | ![LRM volleys arcing over the treeline as a Karnov flies over; Liao mechs and their supply truck on the shore](docs/screenshots/ipad-volleys.jpg) | ![Two of your mechs holding the Airfield under your flag](docs/screenshots/ipad-airfield.jpg) |
+
 | | |
 |---|---|
 | ![The fight for the Isthmus, with a Karnov coming in to land](docs/screenshots/isthmus.jpg) | ![The Karnov setting Charlie's riflemen down by the Isthmus](docs/screenshots/airlift.jpg) |
 | ![Charlie's riflemen and Delta's Elementals dug in behind sandbags](docs/screenshots/dug-in.jpg) | ![A forward base: HQ tent, sandbags, autocannon turret, and the supply truck that built it](docs/screenshots/forward-base.jpg) |
 | ![Build FOB: red rings show where a forward base can't go](docs/screenshots/build-fob.jpg) | ![The islands from above: five capture points from your base (bottom right) to theirs](docs/screenshots/overview.jpg) |
 
-Screenshots are from headless Chrome on a Mac, at full render scale, most of
-them with both sides played by the AI.
+The rest are from headless Chrome on a Mac, at full render scale, most of them
+with both sides played by the AI.
 
 ## Quick start
 
