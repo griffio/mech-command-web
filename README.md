@@ -13,9 +13,7 @@ code: the original data is converted offline into glTF, WebP, PNG, JSON and AAC.
 - **The viewer** (`viewer.html`) is the earlier three.js/WebGL2 version. The game
   sends any browser without WebGPU there automatically.
 
-![Alpha lance's lasers on a Liao lance among the airfield's buildings, with the match's HUD: tickets and capture points along the top, squad cards and orders along the bottom](docs/screenshots/match.jpg)
-
-On an iPad Air M2 (taken with the dev server's **Capture** button, so without the HUD):
+![Alpha lance and a Liao lance trading laser and PPC fire short of the Ridge](docs/screenshots/ipad-beams.jpg)
 
 | | | |
 |---|---|---|
@@ -23,12 +21,14 @@ On an iPad Air M2 (taken with the dev server's **Capture** button, so without th
 
 | | |
 |---|---|
-| ![The fight for the Isthmus, with a Karnov coming in to land](docs/screenshots/isthmus.jpg) | ![The Karnov setting Charlie's riflemen down by the Isthmus](docs/screenshots/airlift.jpg) |
+| ![Alpha lance's lasers on a Liao lance among the airfield's buildings, with the match's HUD: tickets and capture points along the top, squad cards and orders along the bottom](docs/screenshots/match.jpg) | ![The Karnov setting Charlie's riflemen down by the Isthmus](docs/screenshots/airlift.jpg) |
+| ![Alpha lance crossing the airfield](docs/screenshots/ipad-airfield-walk.jpg) | ![The Atlas and the Catapult pressing on past the Mad Cat's wreck toward the Liao-held Ridge](docs/screenshots/ipad-advance.jpg) |
 | ![Charlie's riflemen and Delta's Elementals dug in behind sandbags](docs/screenshots/dug-in.jpg) | ![A forward base: HQ tent, sandbags, autocannon turret, and the supply truck that built it](docs/screenshots/forward-base.jpg) |
 | ![Build FOB: red rings show where a forward base can't go](docs/screenshots/build-fob.jpg) | ![The islands from above: five capture points from your base (bottom right) to theirs](docs/screenshots/overview.jpg) |
 
-The rest are from headless Chrome on a Mac, at full render scale, most of them
-with both sides played by the AI.
+The pictures above without the HUD were taken on an iPad Air M2, with the dev server's
+**Capture** button; those with it come from headless Chrome on a Mac, at full
+render scale, mostly with both sides played by the AI.
 
 ## Quick start
 
