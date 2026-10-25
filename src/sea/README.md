@@ -77,8 +77,19 @@ pilots' gunnery from `missions/warriors/*.fit`):
 
 - Every quarter second each unit picks a target: the one it was ordered to
   attack, else the nearest enemy its side can see (225 m, the ground blocks the
-  view) within 275 m. Enemies close to their best range; the player's mechs hold
-  where they are unless ordered to attack.
+  view) within 275 m. The player's mechs hold where they are unless ordered to
+  attack.
+- Attack movement, as MC2's (`MechWarrior` movement update, `Mover::calcMoveGoal`,
+  `Mover::calcFireRanges`): a unit wants the range point (20, 45, 100 or 160 m,
+  gamesys `OptimalRangePoints`) where its working, loaded weapons do the most
+  damage a second. Once a second, more than a terrain vertex (25.6 m) off that,
+  or out of sight of its target, it walks to a spot on a ring at that range
+  about the target: near it, off its squadmates' spots, and (this project's
+  addition) one it can see the target from. Enemy units at range step round the
+  ring every few seconds (MC2's `keepMoving`, calmer), and stop to fight what
+  they meet within reach on a move. A unit standing with a target turns to face
+  it once it's more than 25° off its front (45° for infantry; gamesys `FireArc`).
+  Units keep 8.5 m apart (soldiers 3 m), shuffling apart when they crowd.
 - Every loaded weapon that is in its range band (short 0-60 m, medium 30-120,
   long 60-180, give or take 12 m), in sight (LRMs may use a teammate's), and
   within 12.5° of where the torso or turret points fires. A mech's torso turns

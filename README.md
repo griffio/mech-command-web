@@ -226,8 +226,18 @@ profiles. In short:
 
 - Every quarter second each unit picks a target (the one it was ordered to
   attack, else the nearest enemy its side can see within 275 m; sight is 225 m
-  and the ground blocks it). Enemies close to their best range; your mechs hold
-  their ground unless ordered to attack, and fire at whatever comes in range.
+  and the ground blocks it). Your mechs hold their ground unless ordered to
+  attack, and fire at whatever comes in range, turning to face it.
+- Units fight from the distance their weapons do best from, as in MC2: 20 m for
+  a brawler with only short-range weapons, 45 m for most mixed loadouts, 100 or
+  160 m for long-range ones. Once a second a fighting unit checks its distance
+  to its target; more than about 25 m off, either way, it walks to a spot on a
+  ring at its distance (backing off when the enemy is too close), one it can see
+  the target from and away from where its lancemates are going. The enemy's
+  units keep moving round that ring while they fight, as MC2's AI does (a
+  calmer step every few seconds), and stop to fight what they meet on their way
+  to a point. Units keep a few metres apart (a mech or vehicle 8.5 m, MC2's
+  movement-map cell), so none stands inside another.
 - Every loaded weapon in its range band (short, medium, long), in sight and
   within 12.5° of where the torso points fires; a mech's torso turns 120° either
   way. Lasers and PPCs strike at once, shells and missiles fly at the original

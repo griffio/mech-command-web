@@ -517,7 +517,7 @@ export class CommanderAI {
         if (index === null) return;
         const p = this.match.points[index]!;
         // Fire support stands off on its own side of the point.
-        const standOff = squad.alive.every((u) => u.combat && bestRange(u.combat.weapons) >= 150) ? 130 : 0;
+        const standOff = squad.alive.every((u) => u.combat && bestRange(u.combat) >= 150) ? 130 : 0;
         const d = Math.hypot(side.base.x - p.x, side.base.z - p.z) || 1;
         const x = p.x + ((side.base.x - p.x) / d) * standOff;
         const z = p.z + ((side.base.z - p.z) / d) * standOff;
@@ -685,7 +685,8 @@ export class CommanderAI {
    */
   private send(squad: Squad, assignment: number, x: number, z: number, retreat: boolean): void {
     const c = squad.centroid();
-    const busy = squad.alive.some((u) => u.route.length || u.attackOrder);
+    // Fighting what it met on the way counts as busy: it goes on once that's settled.
+    const busy = squad.alive.some((u) => u.route.length || u.attackOrder || (u.target && this.world.battle.sees(u, u.target)));
     if (squad.assignment === assignment && (busy || (c && Math.hypot(c[0] - x, c[1] - z) < 45))) return;
     squad.assignment = assignment;
     const [tx, tz] = [x + (Math.random() - 0.5) * 30, z + (Math.random() - 0.5) * 30];

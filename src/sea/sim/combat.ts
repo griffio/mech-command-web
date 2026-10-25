@@ -19,6 +19,8 @@ export const FIRE_ARC = 12.5;
 const RANGE_BANDS: Record<RangeClass, [number, number]> = { short: [0, 60], medium: [30, 120], long: [60, 180] };
 /** Slack on both ends of a band: the diagonal of a movement-map cell (mclib/move.cpp MapCellDiagonal), metres. */
 const RANGE_SLACK = 12.07;
+/** The distances a unit may want to fight from, metres (gamesys WeaponRanges OptimalRangePoints): see bestRange. */
+const OPTIMAL_RANGE_POINTS = [20, 45, 100, 100, 160];
 
 export function inRange(range: RangeClass, distance: number): boolean {
   const [min, max] = RANGE_BANDS[range];
@@ -109,7 +111,12 @@ export abstract class Combatant {
 
   /** Loaded and working (ignoring range, sight and aim). */
   ready(w: WeaponMount, now: number): boolean {
-    return !w.destroyed && w.readyAt <= now && (w.def.ammo === null || (this.ammo.get(w.def.ammo) ?? 0) > 0);
+    return w.readyAt <= now && this.armed(w);
+  }
+
+  /** Working, with rounds left (ignoring when it can fire next). */
+  armed(w: WeaponMount): boolean {
+    return !w.destroyed && (w.def.ammo === null || (this.ammo.get(w.def.ammo) ?? 0) > 0);
   }
 
   /**
@@ -396,21 +403,33 @@ export class VehicleCombat extends Combatant {
 }
 
 /**
- * The distance a unit's weapons do the most damage a second from, metres: the best of a few candidates, the further on
- * a tie (an LRM carrier stands off). Units close to about this before they stop to fight.
+ * The distance a unit wants to fight from, metres (Mover::calcFireRanges, code/mover.cpp): of MC2's range points, the
+ * one where its working, loaded weapons do the most damage a second (a weapon counts at a point above the least of its
+ * band and up to the most), the further on a tie. A brawler with only short-range weapons wants 20 m, an LRM carrier
+ * 160. 0 when it has nothing to fire.
  */
-export function bestRange(weapons: WeaponMount[]): number {
-  let best = 60;
-  let bestRate = -1;
-  for (const d of [40, 60, 90, 120, 150, 180]) {
+export function bestRange(unit: Combatant): number {
+  let best = 0;
+  let bestRate = 0;
+  for (const d of OPTIMAL_RANGE_POINTS) {
     let rate = 0;
-    for (const w of weapons) if (!w.destroyed && inRange(w.def.range, d)) rate += w.def.damage / w.def.recycle;
-    if (rate >= bestRate - 1e-6) {
+    for (const w of unit.weapons) {
+      const [min, max] = RANGE_BANDS[w.def.range];
+      if (unit.armed(w) && d > min && d <= max) rate += w.def.damage / w.def.recycle;
+    }
+    if (rate > 0 && rate >= bestRate - 1e-6) {
       best = d;
       bestRate = rate;
     }
   }
   return best;
+}
+
+/** The furthest a unit's working, loaded weapons reach, metres (Mover::getMaxFireRange); 0 when it has none. */
+export function maxRange(unit: Combatant): number {
+  let most = 0;
+  for (const w of unit.weapons) if (unit.armed(w)) most = Math.max(most, RANGE_BANDS[w.def.range][1]);
+  return most;
 }
 
 function sum(record: Record<string, number>): number {

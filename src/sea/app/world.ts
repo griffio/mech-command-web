@@ -56,6 +56,20 @@ const TYPE_NAMES: Record<string, string> = {
 /** A structure (a turret, a forward base's tent) stays where it's put. */
 export type UnitKind = 'mech' | 'vehicle' | 'infantry' | 'structure';
 
+/**
+ * Units keep this far from the next one's own, metres: in MC2 each mover takes a cell of the movement map (8.5 m), so
+ * none stands inside another. Soldiers, in squads of up to six, keep closer; a structure keeps its footprint.
+ */
+const PERSONAL_M: Record<Exclude<UnitKind, 'structure'>, number> = { mech: 4.3, vehicle: 4.3, infantry: 1.5 };
+/** How fast units crowding one another shuffle apart, metres a second; one on the move gives way three times as much. */
+const SPACE_OUT_MS = 6;
+const MOVING_GIVES = 3;
+/**
+ * A unit standing with a target turns its whole body to it once it's further off its front than this, degrees (MC2's
+ * pivot to target, BattleMech::pivotTo and GroundVehicle's; gamesys FireArc), so it meets its target with its front.
+ */
+const PIVOT_ARC: Record<Exclude<UnitKind, 'structure'>, number> = { mech: 25, vehicle: 25, infantry: 45 };
+
 /** Paint for burnt-out wrecks: every team colour goes to soot. */
 const WRECK_PAINT: PaintScheme = { red: '#2b2724', green: '#2b2724', blue: '#2b2724' };
 const WRECK_GAIN = 0.55;
@@ -274,11 +288,11 @@ export class SeaUnit {
     this.instance.center[2] = this.z;
   }
 
-  /** Standing, turn the hull toward the target when the torso (or turret) can't reach it. */
+  /** Standing, turn the hull toward the target (see PIVOT_ARC); a turret keeps its footing and turns its gun. */
   private faceTarget(dt: number): void {
     const t = this.target!;
     const rel = wrapDegrees(bearing(this, t) - this.rotation);
-    const slack = Math.max(this.twistLimit - 10, 5);
+    const slack = this.kind === 'structure' ? Math.max(this.twistLimit - 10, 5) : PIVOT_ARC[this.kind];
     if (Math.abs(rel) > slack) {
       this.rotation = (this.rotation + Math.sign(rel) * Math.min(Math.abs(rel), TURN_RATE * dt) + 360) % 360;
       this.play('walk');
@@ -874,8 +888,49 @@ export class World {
       this.match?.update(dt);
     }
     for (const u of this.units) u.update(dt, this.terrain, move);
+    if (move) this.spaceOut(dt);
     this.syncSelection();
     this.updateRings();
+  }
+
+  /**
+   * Units standing inside one another's room (PERSONAL_M) shuffle apart, never onto ground they can't stand on; a
+   * structure doesn't move. One walking to a spot another stands on stops beside it instead.
+   */
+  private spaceOut(dt: number): void {
+    const units = this.units.filter((u) => u.alive && u.combat && !u.embarked && u.altitude === 0);
+    const room = (u: SeaUnit) => (u.kind === 'structure' ? u.radius : PERSONAL_M[u.kind]);
+    const gives = (u: SeaUnit) => (u.kind === 'structure' ? 0 : u.route.length && !u.pinned ? MOVING_GIVES : 1);
+    for (let i = 0; i < units.length; i++) {
+      const a = units[i]!;
+      for (let j = i + 1; j < units.length; j++) {
+        const b = units[j]!;
+        const need = room(a) + room(b);
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        if (Math.abs(dx) >= need || Math.abs(dz) >= need) continue;
+        const d = Math.hypot(dx, dz);
+        if (d >= need) continue;
+        for (const [w, s] of [[a, b], [b, a]] as const) {
+          const end = w.route[w.route.length - 1];
+          if (end && !s.route.length && Math.hypot(end[0] - s.x, end[1] - s.z) < need && Math.hypot(end[0] - w.x, end[1] - w.z) < need + ARRIVE_M) w.stop();
+        }
+        const [ga, gb] = [gives(a), gives(b)];
+        if (!ga && !gb) continue;
+        const angle = d > 1e-3 ? Math.atan2(dz, dx) : Math.random() * Math.PI * 2;
+        const push = Math.min(need - d, SPACE_OUT_MS * dt);
+        this.nudge(a, -Math.cos(angle) * push * (ga / (ga + gb)), -Math.sin(angle) * push * (ga / (ga + gb)));
+        this.nudge(b, Math.cos(angle) * push * (gb / (ga + gb)), Math.sin(angle) * push * (gb / (ga + gb)));
+      }
+    }
+  }
+
+  private nudge(u: SeaUnit, dx: number, dz: number): void {
+    if (!dx && !dz) return;
+    const grid = this.gridFor(u);
+    if (grid && !grid.open(...grid.cellOf(u.x + dx, u.z + dz))) return;
+    u.x += dx;
+    u.z += dz;
   }
 
   /**

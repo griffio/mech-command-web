@@ -157,6 +157,8 @@ export class MoveGrid {
     const n = width * height;
     const startI = start[0] * width + start[1];
     const goalI = goal[0] * width + goal[1];
+    // In plain sight: the search would pull its route tight to this one leg anyway.
+    if (this.clearLine(startI, goalI)) return [this.open(...this.cellOf(toX, toZ)) ? [toX, toZ] : this.centre(goal[0], goal[1])];
     const g = new Float32Array(n).fill(Infinity);
     const came = new Int32Array(n).fill(-1);
     const closed = new Uint8Array(n);
@@ -218,6 +220,13 @@ export class MoveGrid {
     // End at the point asked for when it is itself open ground, not at its cell's centre.
     if (this.open(...this.cellOf(toX, toZ))) route[route.length - 1] = [toX, toZ];
     return route.length ? route : [[toX, toZ]];
+  }
+
+  /** A straight walk from one point to the other crosses only open ground (see clearLine): no search needed. */
+  straight(fromX: number, fromZ: number, toX: number, toZ: number): boolean {
+    const start = this.nearestOpen(fromX, fromZ);
+    const goal = this.nearestOpen(toX, toZ);
+    return !!start && !!goal && this.clearLine(start[0] * this.width + start[1], goal[0] * this.width + goal[1]);
   }
 
   /**

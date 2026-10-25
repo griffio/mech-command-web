@@ -1,10 +1,10 @@
-// The fighting on the WebGPU page, on MC2's rules (sim/combat.ts): every quarter second each unit picks a target, closes
-// on it if it must, and fires every weapon that is loaded, in range, in sight and pointing the right way. Shots fly as
-// they do in MC2 (lasers at once, shells and missiles at their speeds) and do their damage when they land. Destroyed
-// units fall, blow up and burn.
+// The fighting on the WebGPU page, on MC2's rules (sim/combat.ts): every quarter second each unit picks a target, keeps
+// to the distance it fights best from, and fires every weapon that is loaded, in range, in sight and pointing the right
+// way. Shots fly as they do in MC2 (lasers at once, shells and missiles at their speeds) and do their damage when they
+// land. Destroyed units fall, blow up and burn.
 import type { CombatEffects } from '../render/fx/combat-effects';
 import type { Blast, MechLocation, StrikeStats } from '../../assets';
-import { ATTACK_RADIUS, COMBAT_TICK, FIRE_ARC, SIGHT_RANGE, arcOf, bestRange, inRange, type Arc, type HitReport, type WeaponMount } from '../sim/combat';
+import { ATTACK_RADIUS, COMBAT_TICK, FIRE_ARC, SIGHT_RANGE, arcOf, bestRange, inRange, maxRange, type Arc, type HitReport, type WeaponMount } from '../sim/combat';
 import { Rng } from '../sim/rng';
 import { aimShare, settle, suppress, SUPPRESSION } from './suppression';
 import type { Squad } from './squads';
@@ -14,12 +14,32 @@ type V3 = [number, number, number];
 
 const NOTHING_SEEN: ReadonlySet<SeaUnit> = new Set();
 
-/** Units close to this share of their best range before they stop to fight. */
-const CLOSE_TO = 0.85;
-/** At most this many route searches each combat tick (a long one costs 10-20 ms). */
+/**
+ * MC2's attack movement (MechWarrior's movement update, code/warrior.cpp; Mover::calcMoveGoal, code/mover.cpp): once a
+ * second a unit fighting looks at how far it is from its target. Further than a terrain vertex (25.6 m) either way from
+ * the distance it wants to fight from (bestRange), or out of sight of the target, it goes to a spot on a ring at that
+ * distance about the target: too far, it closes; too near, it backs off.
+ */
+const KEEP_RANGE_M = 25.6;
+/** Seconds between a unit's looks (gamesys MovementUpdateFrequency). */
+const MOVE_UPDATE_S = 1;
+/** Spots on the ring it chooses among, and the movement-map cell MC2's goal map scores them by, metres. */
+const RING_SPOTS = 16;
+const CELL_M = 8.53;
+/** This project's addition to the goal map: a spot it can see the target from is worth this many cells' walk. */
+const SPOT_SIGHT_CELLS = 25;
+/**
+ * MC2's enemy AI keeps moving while it fights (MechWarrior keepMoving; off for the player's units): at range, it walks to
+ * another spot on the ring, with a 60% chance each second. Calmer here: after a pause, a step part of the way round the
+ * ring, mostly the same way as the last, so it circles its target.
+ */
+const CIRCLE_PAUSE_S: [number, number] = [1.5, 4];
+const CIRCLE_STEP_DEG: [number, number] = [25, 60];
+const CIRCLE_TURN_BACK = 0.25;
+/** MC2 scores its spots at random when it moves on like this; here up to this many cells' walk, so steps vary. */
+const CIRCLE_RANDOM_CELLS = 5;
+/** At most this many route searches each combat tick (a long one costs 10-20 ms); a straight walk needs none. */
 const ROUTES_PER_TICK = 2;
-/** Seconds between a unit's route searches while it closes on a target. */
-const REROUTE_S = 2;
 /** Seconds a wreck burns. */
 const BURN_S = 40;
 /** An AI unit chases only targets within this of where its squad was sent, metres. */
@@ -136,7 +156,11 @@ export class Battle {
   private readonly seen = new Map<number, Set<SeaUnit>>();
   /** Whom each unit sees itself. */
   private readonly sight = new Map<SeaUnit, Set<SeaUnit>>();
-  private readonly nextRoute = new Map<SeaUnit, number>();
+  /** When each unit fighting next looks at where it stands (see KEEP_RANGE_M). */
+  private readonly nextMove = new Map<SeaUnit, number>();
+  /** When each enemy unit at range next steps round its target, and which way it's going round (1 or -1). */
+  private readonly circleAt = new Map<SeaUnit, number>();
+  private readonly orbit = new Map<SeaUnit, number>();
   private readonly nextSmoke = new Map<SeaUnit, number>();
 
   constructor(
@@ -163,7 +187,8 @@ export class Battle {
     this.missiles.length = 0;
     this.seen.clear();
     this.sight.clear();
-    this.nextRoute.clear();
+    this.nextMove.clear();
+    this.circleAt.clear();
     this.outcome = null;
     this.tickIn = 0;
   }
@@ -251,36 +276,123 @@ export class Battle {
   }
 
   /**
-   * Units under an attack order, and every enemy unit with a target (near where its squad was sent), walk until they are
-   * within their best range and see the target. The player's other units hold where they are (or keep to the route they
-   * were given) and fire at what comes into range.
+   * Units under an attack order, and every enemy unit with a target near where its squad was sent (or within its reach on
+   * the way there), fight from the distance they want to (see KEEP_RANGE_M), and the enemy's circle their targets. The
+   * player's other units hold where they are (or keep to the route they were given) and fire at what comes into range.
    */
   private close(u: SeaUnit): void {
-    if (u.kind === 'structure') return; // turrets and tents stay put
+    if (u.kind === 'structure' || u.pinned) return; // turrets and tents stay put; pinned soldiers stay down
     const t = u.target;
-    const leashed = !u.leash || !t || Math.hypot(t.x - u.leash.x, t.z - u.leash.z) <= LEASH_M;
-    const hunting = u.attackOrder !== null || (u.team !== PLAYER_TEAM && leashed);
-    if (!t || !hunting) {
+    const combat = u.combat!;
+    const range = bestRange(combat);
+    if (!t || !range || !this.hunting(u, t)) {
       if (u.engaging) u.stop();
+      this.circleAt.delete(u);
       return;
     }
-    if (u.route.length && !u.engaging) return; // walking where the player sent it
-    const d = Math.hypot(t.x - u.x, t.z - u.z);
-    if (d <= bestRange(u.combat!.weapons) * CLOSE_TO && this.sees(u, t)) {
-      if (u.engaging) u.stop();
-      return;
+    if (u.route.length && !u.engaging) {
+      // Walking where it was sent: the player's units carry on, firing as they pass, and so do the enemy's falling back.
+      // The enemy's others stop to fight what they meet within reach (MC2's alarms turn a move into an attack).
+      if (u.team === PLAYER_TEAM || u.squad?.order.kind === 'retreat' || !this.within(u, t)) return;
+      u.stop();
     }
-    if (this.time < (this.nextRoute.get(u) ?? 0) || this.routes >= ROUTES_PER_TICK) return;
-    const end = u.route[u.route.length - 1];
-    if (u.engaging && end && Math.hypot(end[0] - t.x, end[1] - t.z) < 15) return; // still headed the right way
-    this.routes++;
-    this.nextRoute.set(u, this.time + REROUTE_S);
+    if (this.time < (this.nextMove.get(u) ?? 0)) return;
+    this.nextMove.set(u, this.time + MOVE_UPDATE_S);
+    const end = u.engaging ? u.route[u.route.length - 1] : undefined;
+    let spot: [number, number] | null;
+    if (end) {
+      // On its way to a spot: carry on while that's still about the right distance from the target.
+      if (Math.abs(Math.hypot(end[0] - t.x, end[1] - t.z) - range) <= KEEP_RANGE_M) return;
+      spot = this.ringSpot(u, t, range);
+    } else if (Math.abs(Math.hypot(t.x - u.x, t.z - u.z) - range) <= KEEP_RANGE_M && this.sees(u, t)) {
+      // At range: the player's units hold, the enemy's step round the target after a pause.
+      if (u.team === PLAYER_TEAM) return;
+      const at = this.circleAt.get(u);
+      if (at === undefined) this.circleAt.set(u, this.time + CIRCLE_PAUSE_S[0] + Math.random() * (CIRCLE_PAUSE_S[1] - CIRCLE_PAUSE_S[0]));
+      if (at === undefined || this.time < at) return;
+      spot = this.circleSpot(u, t, range);
+    } else spot = this.ringSpot(u, t, range);
+    if (spot) this.walk(u, spot);
+  }
+
+  /** Whether a unit goes after its target: on an attack order; or the enemy's, near where it was sent or within reach. */
+  private hunting(u: SeaUnit, t: SeaUnit): boolean {
+    if (u.attackOrder) return true;
+    if (u.team === PLAYER_TEAM) return false;
+    const leashed = !u.leash || Math.hypot(t.x - u.leash.x, t.z - u.leash.z) <= LEASH_M;
+    return leashed || (u.squad?.order.kind !== 'retreat' && this.within(u, t));
+  }
+
+  /** The target is in sight and within reach of the unit's weapons. */
+  private within(u: SeaUnit, t: SeaUnit): boolean {
+    return this.sees(u, t) && Math.hypot(t.x - u.x, t.z - u.z) <= maxRange(u.combat!);
+  }
+
+  /**
+   * A spot on the ring at `range` about a target to fight it from, scored as MC2's goal map scores cells: somewhere
+   * other than where the unit stands, a point off for each cell further from it, a hundred off where a squadmate is
+   * going; and (this project's) a good deal for seeing the target from there. Only open ground it can walk to. `arc`
+   * keeps to bearings from the target between two angles (degrees), each spot scored a little at random. With no spot,
+   * the open ground nearest the ring's near side.
+   */
+  private ringSpot(u: SeaUnit, t: SeaUnit, range: number, arc?: [number, number]): [number, number] | null {
     const grid = this.world.gridFor(u);
-    const route = grid ? grid.findPath(u.x, u.z, t.x, t.z) : [[t.x, t.z] as [number, number]];
-    if (route) {
-      u.walkTo(route);
-      u.engaging = true;
+    const terrain = this.world.terrain;
+    const eye = u.eyeY - terrain.heightAt(u.x, u.z);
+    const mates = (u.squad?.alive ?? []).filter((m) => m !== u).map((m) => m.route[m.route.length - 1] ?? [m.x, m.z]);
+    let best: [number, number] | null = null;
+    let bestScore = -Infinity;
+    for (let i = 0; i < RING_SPOTS; i++) {
+      const a = (((arc ? arc[0] + ((arc[1] - arc[0]) * i) / (RING_SPOTS - 1) : (360 * i) / RING_SPOTS) * Math.PI) / 180);
+      const x = t.x + Math.sin(a) * range;
+      const z = t.z + Math.cos(a) * range;
+      const away = Math.hypot(x - u.x, z - u.z);
+      if (away < CELL_M) continue;
+      if (grid && (!grid.open(...grid.cellOf(x, z)) || !grid.connected(u.x, u.z, x, z))) continue;
+      let score = -away / CELL_M;
+      if (mates.some(([mx, mz]) => Math.hypot(mx - x, mz - z) < CELL_M * 1.5)) score -= 100;
+      if (!terrain.blocked(x, terrain.heightAt(x, z) + eye, z, t.x, t.eyeY, t.z)) score += SPOT_SIGHT_CELLS;
+      if (arc) score += Math.random() * CIRCLE_RANDOM_CELLS;
+      if (score > bestScore) {
+        best = [x, z];
+        bestScore = score;
+      }
     }
+    if (best || arc) return best;
+    const d = Math.hypot(u.x - t.x, u.z - t.z) || 1;
+    const near = this.world.openNear(t.x + ((u.x - t.x) / d) * range, t.z + ((u.z - t.z) / d) * range, u.moveClass);
+    return !grid || grid.connected(u.x, u.z, near[0], near[1]) ? near : null;
+  }
+
+  /** The enemy's step round its target: part of the way round the ring, mostly the way it went last time. */
+  private circleSpot(u: SeaUnit, t: SeaUnit, range: number): [number, number] | null {
+    let way = this.orbit.get(u) ?? (Math.random() < 0.5 ? 1 : -1);
+    if (Math.random() < CIRCLE_TURN_BACK) way = -way;
+    const from = bearing(t, u);
+    for (const w of [way, -way]) {
+      const spot = this.ringSpot(u, t, range, [from + w * CIRCLE_STEP_DEG[0], from + w * CIRCLE_STEP_DEG[1]]);
+      if (!spot) continue;
+      this.orbit.set(u, w);
+      return spot;
+    }
+    return null;
+  }
+
+  /** Walk a fighting unit to a spot (a search for a route around what's in the way waits its turn). */
+  private walk(u: SeaUnit, [x, z]: [number, number]): void {
+    const grid = this.world.gridFor(u);
+    if (grid && !grid.straight(u.x, u.z, x, z)) {
+      if (this.routes >= ROUTES_PER_TICK) {
+        this.nextMove.set(u, this.time + COMBAT_TICK);
+        return;
+      }
+      this.routes++;
+    }
+    const route = grid ? grid.findPath(u.x, u.z, x, z) : [[x, z] as [number, number]];
+    if (!route) return;
+    u.walkTo(route);
+    u.engaging = true;
+    this.circleAt.delete(u);
   }
 
   /** Fire every weapon that can: loaded, in range, in sight (an LRM may use a teammate's), and aimed at the target. */
