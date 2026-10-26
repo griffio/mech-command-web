@@ -41,7 +41,7 @@ New:
   Gameplay below); `app/unit-bars.ts`: health bars over the units, and a job's progress (a truck building).
 - `sim/move-grid.ts`: routes over MC2's movement map, one per way of moving (mechs wade the shallows, hovercraft cross
   water, ground units keep to land and fords, and they and hovercraft to the roads), with connected regions to tell
-  what can't be reached on foot.
+  what can't be reached on foot; walls close cells while they stand.
 - `app/match.ts`: Advance and Secure on a scenario (`scenarios/*.json`): capture points, tickets, bases that
   reinforce and refit, fog of war, infantry digging in, the AI commander, and the difficulty (the enemy pilots'
   gunnery; its button and memory in `main.ts`). `app/squads.ts`: squads (formation
@@ -52,7 +52,8 @@ New:
   bombing run, and the bursts (the damage is `Battle.bombard`, on MC2's rule); sensor probes are called the same way.
   `app/sensors.ts`: what each side's sensors pick up beyond sight (mechs' sensor components, forward bases' towers,
   probes), and the player's probe's ring.
-  `app/logistics.ts`: supply trucks and the forward bases they build, supply, and the services bases give.
+  `app/logistics.ts`: supply trucks and what they build (forward bases, turrets, walls), supply, and the services bases
+  give.
   `app/match-hud.ts`: the ticket and point bar, the squad cards, squad letters over the field, and sensor blips.
   `app/sound.ts`: MC2's radio, Betty and interface sounds through Web Audio, queued by MC2's radio rules.
   `app/callouts.ts`: what the squads and Betty say, and the notices, as orders are given and the match goes.

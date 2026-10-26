@@ -24,6 +24,7 @@ import { FIRE_ARC, MechCombat, VehicleCombat } from '../sim/combat';
 import { MoveGrid, type MoveClass } from '../sim/move-grid';
 import type { Terrain } from '../sim/terrain/terrain';
 import { Battle } from './battle';
+import type { BuildKind } from './logistics';
 import { Match } from './match';
 import { formationSlots, type Squad } from './squads';
 
@@ -130,6 +131,8 @@ export class SeaUnit {
   suppressedAt = -Infinity;
   /** A soldier pinned down by fire: on the ground, not moving until it slackens. */
   pinned = false;
+  /** A piece of wall (logistics.ts): it closes the ground it stands on, and is shot at only when ordered. */
+  wall = false;
   /** A job it's part-way through (a truck building a forward base), shown over it: the share done, and what it is. */
   job: { share: number; label: string } | null = null;
   /**
@@ -282,6 +285,11 @@ export class SeaUnit {
   /** A clip played once has reached its end. */
   get clipDone(): boolean {
     return this.animator?.finished ?? true;
+  }
+
+  /** The waypoints it has still to reach. */
+  get ahead(): [number, number][] {
+    return this.route.slice(this.routeIndex);
   }
 
   walkTo(points: [number, number][]): void {
@@ -680,6 +688,43 @@ export class World {
     return this.unitsFile.props?.[key.toLowerCase()] ?? null;
   }
 
+  /** A scenario prop's reach along its own z axis, metres from its origin (a wall piece's two ends), or null. */
+  async propLength(key: string): Promise<[number, number] | null> {
+    const path = this.propPath(key);
+    if (!path) return null;
+    const data = await this.glb(path);
+    let min = Infinity;
+    let max = -Infinity;
+    for (const p of data.primitives) {
+      for (let i = 2; i < p.positions.length; i += 3) {
+        min = Math.min(min, p.positions[i]!);
+        max = Math.max(max, p.positions[i]!);
+      }
+    }
+    return Number.isFinite(min) ? [min * this.scale, max * this.scale] : null;
+  }
+
+  /** Units whose way on goes through these cells (a wall just went up there) find another, or stop. */
+  reroute(cells: ReadonlySet<number>): void {
+    for (const u of this.units) {
+      if (!u.alive || u.embarked || u.flies || !u.route.length) continue;
+      const grid = this.gridFor(u);
+      const ahead = u.ahead;
+      if (!grid || !ahead.length) continue;
+      let from: [number, number] = [u.x, u.z];
+      const cut = ahead.some((p) => {
+        const hit = grid.crosses(from[0], from[1], p[0], p[1], cells);
+        from = p;
+        return hit;
+      });
+      if (!cut) continue;
+      const end = ahead[ahead.length - 1]!;
+      const route = grid.findPath(u.x, u.z, end[0], end[1]);
+      if (route) u.walkTo(route);
+      else u.stop();
+    }
+  }
+
   /** A scenario prop's model (a flag), by object file name, or null if it wasn't exported. */
   async propModel(key: string): Promise<GpuModel | null> {
     const path = this.unitsFile.props?.[key.toLowerCase()];
@@ -914,22 +959,22 @@ export class World {
     return routed;
   }
 
-  /** Send the selected logistics squads to build a forward base at a point. */
-  orderBuildFob(x: number, z: number): void {
+  /** Send the selected logistics squads to build something (a forward base, a turret, a wall) at a point. */
+  orderBuild(kind: BuildKind, x: number, z: number): void {
     const logistics = this.match?.logistics;
     if (!logistics) return this.onRefused('there are no supply trucks in this scenario');
     const squads = [...this.selectedSquads].filter((q) => q.isLogistics);
     if (!squads.length) return this.onRefused('select a supply truck first');
-    this.onOrders(squads.map((q) => ({ squad: q, order: 'build', refused: logistics.orderBuild(q, x, z) })));
+    this.onOrders(squads.map((q) => ({ squad: q, order: 'build', refused: logistics.orderBuild(q, kind, x, z) })));
   }
 
-  /** Why none of the selected squads could build a forward base just now, or null if one can. */
-  whyNoFob(): string | null {
+  /** Why none of the selected squads could build this just now, or null if one can. */
+  whyNoBuild(kind: BuildKind): string | null {
     const logistics = this.match?.logistics;
     if (!logistics) return 'there are no supply trucks in this scenario';
     const squads = [...this.selectedSquads].filter((q) => q.isLogistics);
     if (!squads.length) return 'select a supply truck first';
-    const why = squads.map((q) => logistics.whyNotNow(q));
+    const why = squads.map((q) => logistics.whyNotNow(q, kind));
     return why.every((w) => w) ? why[0]! : null;
   }
 
@@ -987,7 +1032,8 @@ export class World {
    * apart only from one another, a rotor's breadth (their size).
    */
   private spaceOut(dt: number): void {
-    const units = this.units.filter((u) => u.alive && u.combat && !u.embarked && u.altitude === 0);
+    // A wall keeps its own footprint on the movement map.
+    const units = this.units.filter((u) => u.alive && u.combat && !u.embarked && u.altitude === 0 && !u.wall);
     const room = (u: SeaUnit) => (u.kind === 'structure' ? u.radius : u.flies ? u.size * 0.5 : PERSONAL_M[u.kind]);
     const gives = (u: SeaUnit) => (u.kind === 'structure' || (u.flies && u.grounded) ? 0 : u.route.length && !u.pinned ? MOVING_GIVES : 1);
     for (let i = 0; i < units.length; i++) {

@@ -243,10 +243,15 @@ export class Battle {
         const b = units[j]!;
         if (a.team === b.team || Math.hypot(a.x - b.x, a.z - b.z) > SIGHT_RANGE) continue;
         if (terrain.blocked(a.x, a.eyeY, a.z, b.x, b.eyeY, b.z)) continue;
-        this.sight.get(a)!.add(b);
-        this.sight.get(b)!.add(a);
-        this.seen.get(a.team)!.add(b);
-        this.seen.get(b.team)!.add(a);
+        // A wall is seen, but keeps no lookout.
+        if (!a.wall) {
+          this.sight.get(a)!.add(b);
+          this.seen.get(a.team)!.add(b);
+        }
+        if (!b.wall) {
+          this.sight.get(b)!.add(a);
+          this.seen.get(b.team)!.add(a);
+        }
       }
     }
   }
@@ -274,7 +279,8 @@ export class Battle {
       return;
     }
     const seen = this.seen.get(u.team);
-    const near = (t: SeaUnit) => t.alive && !!seen?.has(t) && Math.hypot(t.x - u.x, t.z - u.z) <= ATTACK_RADIUS;
+    // Walls are shot at only when a unit is ordered to.
+    const near = (t: SeaUnit) => t.alive && !t.wall && !!seen?.has(t) && Math.hypot(t.x - u.x, t.z - u.z) <= ATTACK_RADIUS;
     if (u.target && near(u.target)) return;
     let best: SeaUnit | null = null;
     let bestD = Infinity;

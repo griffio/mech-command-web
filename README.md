@@ -89,8 +89,9 @@ long-press (or shift-click) to add one to the selection or take it out, or use
 **Select all**; tap the ground to send the selection there, or an enemy to attack
 it. A second tap on a selected squad's card looks at it, and a tap on a point in
 the top bar looks at the point. **Stop** halts them (and drops an attack order)
-and **Run** makes mechs run. **Airlift** and **Build FOB** appear when the
-selection has infantry or a supply truck: press one, then tap the ground.
+and **Run** makes mechs run. **Airlift** appears when the selection has
+infantry, and **Build FOB**, **Build turret** and **Build wall** when it has a
+supply truck: press one, then tap the ground.
 **Artillery** and **Air strike** call in a strike, and **Sensor probe** drops a
 probe: press one, then tap where it should land (they show how long until
 they're ready again).
@@ -114,8 +115,9 @@ simple AI commander.
 - **Points.** Five capture points run along the islands from your base to
   theirs. Each side can take only the next point beyond the ones it holds:
   standing in its circle with no enemy there turns it, faster with more units
-  (an enemy point goes neutral first). The top bar shows tickets, each point's
-  holder and progress, and the points in play (dashed).
+  (an enemy point goes neutral first); buildings (turrets, walls) don't count.
+  The top bar shows tickets, each point's holder and progress, and the points
+  in play (dashed).
 - **Tickets.** Every unit lost costs its side tickets (a mech by its weight, 4
   to 10; a helicopter or an Elemental 2; a soldier or a vehicle 1, as a vehicle
   goes down to a hit or two), and so does every point lost. A side loses when its tickets run out, or wins by
@@ -228,7 +230,21 @@ simple AI commander.
   truck is empty, when a forward base runs dry, and when a squad came back at
   the main base because no forward base could pay for it. Destroy the tent and
   the base is gone (10 tickets). The AI builds a forward base back from the point
-  it's attacking and keeps it supplied.
+  it's attacking and keeps it supplied, and puts up two turrets in the point it
+  holds at the front and a stretch of wall in front of it.
+- **Turrets and walls.** A supply truck also builds, for supply, a turret (the
+  forward base's autocannon turret: 100 supply, 10 seconds) anywhere outside the
+  enemy's base, or a stretch of wall (50 supply, 8 seconds): two of MC2's light
+  wall pieces end to end, 56 m in all, across the way the enemy comes at that
+  spot (toward the next point on their side), built from behind. As in MC2, a
+  wall closes the ground it stands on to everything but aircraft, though not
+  sight or fire, and each piece comes down to 30 points of damage
+  (`davionlightwall.fit`). Walls are shot at only when you order it (tap one).
+  Units on their way through go round. A wall can't go where it would cut a
+  point or a base off from anywhere it can now be reached from, by any way of
+  moving: walls slow the enemy and steer it round, into your turrets' fire, but
+  can't shut it out (on this map only one spot would). A side keeps up to 6
+  turrets and 6 stretches of wall.
 - **Radio.** Your squads answer over the radio in MC2's pilots' voices (each squad
   its own, set in the scenario): acknowledging orders, refusing ones they can't
   carry out ("can't get there", an illegal order), and calling out new contacts,
@@ -277,8 +293,11 @@ short of the point, and in nine matches one APC was lost with a squad aboard.
 With sensors as well, Liao won two of three, by 29 and 49 tickets, and your side
 one by 8: each side dropped two or three probes a match and built one or two
 towers, and about half the strikes went in on enemies only sensors had picked
-up. A match can swing by 70 tickets, so a handful of matches shows a trend at
-best. `?scenario=none` shows the mission's
+up. With turrets and walls too, your side won two of three, by 26 and 45, and
+Liao one by 7: each side's truck put up two to six turrets a match (which made
+one to seven kills a side), and hardly any walls, as the spot in front of a
+point the AI holds is often water. A match can swing by 70 tickets, so a
+handful of matches shows a trend at best. `?scenario=none` shows the mission's
 own units instead (your lance is then its three mechs plus an Atlas and a
 Madcat), and `?speed=4` runs the world four times as fast (for testing).
 
@@ -286,7 +305,7 @@ Orders are routed over MC2's movement map (`src/sea/sim/move-grid.ts`): A* over 
 300×300 cells of 8.5 m with the engine's rules (no off-map cells or deep water,
 shallow water and passable ground only, forest about 2.8× the cost of clear
 ground), then pulled tight so routes only turn where something is in the way.
-Ground vehicles, hovercraft and infantry (in MC2's code its soldiers are ground
+Walls close the cells under them while they stand. Ground vehicles, hovercraft and infantry (in MC2's code its soldiers are ground
 vehicles too) keep to the roads: a road cell costs them a quarter of clear ground
 (`MOVEPARAM_FOLLOW_ROADS`, set for every ground vehicle). They're no faster
 there, so a route by road can be the longer one: from your base to the Ridge

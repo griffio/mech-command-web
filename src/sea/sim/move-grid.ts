@@ -40,8 +40,11 @@ export class MoveGrid {
   readonly x0: number;
   readonly z0: number;
 
-  /** Connected region of each open cell (-1 blocked), worked out on first use. */
+  /** Connected region of each open cell (-1 blocked), worked out on first use (and again after a wall goes up or down). */
   private regions: Int32Array | null = null;
+  /** How many walls stand on each cell, and the cells' costs without them. */
+  private readonly walls: Uint16Array;
+  private readonly bare: Float32Array;
 
   constructor(
     cells: Uint32Array,
@@ -72,6 +75,54 @@ export class MoveGrid {
       }
       this.cost[i] = c;
     }
+    this.walls = new Uint16Array(width * height);
+    this.bare = this.cost.slice();
+  }
+
+  /**
+   * Every cell a straight line from one world point to another passes through, joined edge to edge (so nothing slips
+   * diagonally through the gaps): what a wall standing along it closes.
+   */
+  cellsAlong(ax: number, az: number, bx: number, bz: number): number[] {
+    const cells = new Set<number>();
+    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / (this.cell / 4)));
+    let last: [number, number] | null = null;
+    for (let k = 0; k <= steps; k++) {
+      const [r, c] = this.cellOf(ax + ((bx - ax) * k) / steps, az + ((bz - az) * k) / steps);
+      if (r < 0 || c < 0 || r >= this.height || c >= this.width) continue;
+      if (last && last[0] !== r && last[1] !== c) cells.add(last[0] * this.width + c);
+      cells.add(r * this.width + c);
+      last = [r, c];
+    }
+    return [...cells];
+  }
+
+  /** A wall stands on these cells: nothing goes through them until it's taken down (reopen). */
+  close(cells: number[]): void {
+    for (const i of cells) {
+      this.walls[i]!++;
+      this.cost[i] = BLOCKED;
+    }
+    this.regions = null;
+  }
+
+  /** A wall on these cells is gone (where no other wall stands, they're as they were). */
+  reopen(cells: number[]): void {
+    for (const i of cells) {
+      if (this.walls[i]! > 0) this.walls[i]!--;
+      if (!this.walls[i]) this.cost[i] = this.bare[i]!;
+    }
+    this.regions = null;
+  }
+
+  /** Can a unit of this class stand on every one of these cells (as it could before any wall)? */
+  openGround(cells: number[]): boolean {
+    return cells.every((i) => this.bare[i]! < BLOCKED);
+  }
+
+  /** Does a straight walk between two world points pass through any of these cells? */
+  crosses(ax: number, az: number, bx: number, bz: number, cells: ReadonlySet<number>): boolean {
+    return this.cellsAlong(ax, az, bx, bz).some((i) => cells.has(i));
   }
 
   /** Can a unit of this class get from one world point to the other (each moved to its nearest open cell)? */

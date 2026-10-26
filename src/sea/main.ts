@@ -25,6 +25,7 @@ import { MatchHud } from './app/match-hud';
 import { Music } from './app/music';
 import { Notice } from './app/notice';
 import { Sound } from './app/sound';
+import type { BuildKind } from './app/logistics';
 import type { Squad } from './app/squads';
 import { CALL_IN_NAMES, CALL_INS, type CallIn } from './app/support';
 import { UnitBars } from './app/unit-bars';
@@ -347,10 +348,10 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
       return setMode(null);
     }
     if (Array.isArray(hit)) {
-      // With Airlift pressed, the tap is where the Karnov drops the selected infantry; with Build FOB, where the
-      // selected truck builds a forward base.
+      // With Airlift pressed, the tap is where the Karnov drops the selected infantry; with a Build button, where the
+      // selected truck builds a forward base, a turret or a wall.
       if (mode === 'airlift') world.orderAirlift(hit[0], hit[1]);
-      else if (mode === 'build') world.orderBuildFob(hit[0], hit[1]);
+      else if (mode && buildButtons.has(mode as BuildKind)) world.orderBuild(mode as BuildKind, hit[0], hit[1]);
       else world.orderMove(hit[0], hit[1]);
       setMode(null);
     } else world.tapUnit(hit, e.shiftKey);
@@ -360,26 +361,37 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
 
   const run = document.getElementById('cmd-run') as HTMLButtonElement;
   const airlift = document.getElementById('cmd-airlift') as HTMLButtonElement;
-  const build = document.getElementById('cmd-build') as HTMLButtonElement;
-  // Airlift and Build FOB are modes for the next tap on the ground (pressing one lets go of the other): while one waits,
-  // the notice says what to tap, and for a forward base red rings show where it can't go.
-  let mode: 'airlift' | 'build' | CallIn | null = null;
+  const buildButtons = new Map<BuildKind, HTMLButtonElement>([
+    ['fob', document.getElementById('cmd-build') as HTMLButtonElement],
+    ['turret', document.getElementById('cmd-turret') as HTMLButtonElement],
+    ['wall', document.getElementById('cmd-wall') as HTMLButtonElement],
+  ]);
+  // Airlift and the Build buttons are modes for the next tap on the ground (pressing one lets go of the other): while
+  // one waits, the notice says what to tap, and for a build red rings show where it can't go.
+  let mode: 'airlift' | BuildKind | CallIn | null = null;
   const strikeButtons = new Map(CALL_INS.map((c) => [c, document.getElementById(`cmd-${c}`) as HTMLButtonElement]));
   const names = (pick: (q: Squad) => boolean) => [...world.selectedSquads].filter(pick).map((q) => q.name).join(' and ');
   function setMode(next: typeof mode): void {
     if (next === mode) return;
     mode = next;
     airlift.setAttribute('aria-pressed', String(mode === 'airlift'));
-    build.setAttribute('aria-pressed', String(mode === 'build'));
+    for (const [kind, button] of buildButtons) button.setAttribute('aria-pressed', String(mode === kind));
     for (const [call, button] of strikeButtons) button.setAttribute('aria-pressed', String(mode === call));
     const strike = mode && (CALL_INS as string[]).includes(mode) ? world.match?.support?.stats(mode as CallIn) : null;
-    void world.match?.logistics?.showNoBuild(mode === 'build' ? PLAYER_TEAM : null);
+    const building = mode && buildButtons.has(mode as BuildKind) ? (mode as BuildKind) : null;
+    const logistics = world.match?.logistics;
+    void logistics?.showNoBuild(building ? PLAYER_TEAM : null, building ?? 'fob');
+    const trucks = names((q) => q.isLogistics);
     notice.hint(
       mode === 'airlift'
         ? `Tap where the Karnov should set ${names((q) => q.airliftable && !q.airborne)} down`
-        : mode === 'build'
-          ? `Tap where ${names((q) => q.isLogistics)} should build a forward base, outside the red rings`
-          : strike && mode === 'sensor'
+        : building === 'fob'
+          ? `Tap where ${trucks} should build a forward base, outside the red rings`
+          : building === 'turret'
+            ? `Tap where ${trucks} should build a turret (${logistics?.price('turret')} supply), outside the red ring`
+            : building === 'wall'
+              ? `Tap where ${trucks} should build a wall (${logistics?.price('wall')} supply): it runs across the way the enemy comes, and blocks the way but not fire`
+              : strike && mode === 'sensor'
             ? `Tap where the sensor probe should land: it picks up the enemy within ${strike.sensorRange} m, a reach that shrinks to nothing over ${Math.round(strike.sensorTime / 60)} minutes`
             : strike && mode
               ? `Tap where the ${CALL_IN_NAMES[mode as CallIn].toLowerCase()} should land, where your squads can see or your sensors reach: it hits everything within ${strike.minorRange} m, yours too`
@@ -390,16 +402,18 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     sound?.effect(mode === 'airlift' ? 'off' : 'on');
     setMode(mode === 'airlift' ? null : 'airlift');
   });
-  build.addEventListener('click', () => {
-    if (mode !== 'build') {
-      // Refused straight away when the truck can't build anywhere (too little supply, too many bases).
-      const why = world.whyNoFob();
-      if (why) return callouts?.refused(why, [...world.selectedSquads].find((q) => q.isLogistics) ?? null);
-    }
-    sound?.effect(mode === 'build' ? 'off' : 'on');
-    setMode(mode === 'build' ? null : 'build');
-  });
-  // Artillery and Air strike: a mode for the next tap, once the strike is ready.
+  for (const [kind, button] of buildButtons) {
+    button.addEventListener('click', () => {
+      if (mode !== kind) {
+        // Refused straight away when the truck can't build one anywhere (too little supply, too many already).
+        const why = world.whyNoBuild(kind);
+        if (why) return callouts?.refused(why, [...world.selectedSquads].find((q) => q.isLogistics) ?? null);
+      }
+      sound?.effect(mode === kind ? 'off' : 'on');
+      setMode(mode === kind ? null : kind);
+    });
+  }
+  // Artillery, Air strike and Sensor probe: a mode for the next tap, once it's ready.
   for (const [call, button] of strikeButtons) {
     button.addEventListener('click', () => {
       const support = world.match?.support;
@@ -412,7 +426,8 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
       setMode(mode === call ? null : call);
     });
   }
-  // Airlift is offered while the selection has something the Karnov can carry; Build FOB while it has a supply truck.
+  // Airlift is offered while the selection has something the Karnov can carry; the Build buttons while it has a supply
+  // truck (for what the scenario gives it to build).
   const offer = (button: HTMLButtonElement, on: boolean, which: typeof mode) => {
     if (button.hidden === on) button.hidden = !on;
     if (!on && mode === which) setMode(null);
@@ -420,7 +435,8 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
   window.setInterval(() => {
     const squads = [...world.selectedSquads];
     offer(airlift, !!world.match?.airlift.available && squads.some((q) => q.airliftable && !q.airborne), 'airlift');
-    offer(build, !!world.match?.logistics && squads.some((q) => q.isLogistics && !q.airborne), 'build');
+    const trucks = squads.some((q) => q.isLogistics && !q.airborne);
+    for (const [kind, button] of buildButtons) offer(button, trucks && !!world.match?.logistics?.canBuild(PLAYER_TEAM, kind), kind);
     // A strike's button shows how long until it's ready.
     const support = world.match?.support;
     for (const [call, button] of strikeButtons) {

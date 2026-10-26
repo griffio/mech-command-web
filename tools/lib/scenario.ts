@@ -34,6 +34,8 @@ export interface ScenarioSide {
   name: string;
   /** Object file of the flag raised over the points it holds. */
   flag: string;
+  /** Object file of the wall its supply trucks build ("davionlightwall"). */
+  wall?: string;
   /** Where its squads start, reinforce and repair (world metres). */
   base: { x: number; z: number };
   /** Paint (base, highlight 1, highlight 2); the player's side wears the player's paint. */
@@ -138,6 +140,7 @@ export function scenarioNeeds(scenarios: Scenario[]): {
     }
     for (const side of s.sides) {
       props.add(side.flag.toLowerCase());
+      if (side.wall) props.add(side.wall.toLowerCase());
       for (const squad of side.squads) {
         for (const u of squad.units) units.add(u.toLowerCase());
         if (squad.carrier) units.add(squad.carrier.toLowerCase());

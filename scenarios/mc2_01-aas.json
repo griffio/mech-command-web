@@ -56,6 +56,7 @@
       "team": 0,
       "name": "Your battalion",
       "flag": "davionflag",
+      "wall": "davionlightwall",
       "base": {
         "x": 524,
         "z": 464
@@ -135,6 +136,7 @@
       "team": 1,
       "name": "Liao garrison",
       "flag": "liaoflag",
+      "wall": "liaolightwall",
       "base": {
         "x": -762,
         "z": 55

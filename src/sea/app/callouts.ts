@@ -133,6 +133,10 @@ export class Callouts {
         if (!own) return;
         this.notice.show('Forward base ready');
         return this.sound?.effect('place');
+      case 'built':
+        if (!own) return;
+        this.notice.show(s.what === 'turret' ? 'Turret ready' : 'Wall up: the enemy has to go round it, or shoot it down');
+        return this.sound?.effect('place');
       case 'fobLost':
         if (!own) return this.notice.show('Enemy forward base destroyed');
         this.notice.show('Your forward base was destroyed', 'alert');

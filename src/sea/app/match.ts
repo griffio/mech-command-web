@@ -99,6 +99,8 @@ export type MatchSignal =
   | { kind: 'captured' | 'lost'; point: CapturePoint; team: number }
   | { kind: 'ended'; winner: number }
   | { kind: 'fobBuilt' | 'fobLost'; team: number }
+  /** A side's truck built a turret or a stretch of wall. */
+  | { kind: 'built'; what: 'turret' | 'wall'; team: number }
   /** A truck (its squad) or a forward base (squad null) has run out of supply. */
   | { kind: 'outOfSupply'; team: number; squad: Squad | null }
   /** A side can call a strike again; a side has called one (`seen` by the player: theirs, or near their units). */
@@ -277,11 +279,11 @@ export class Match {
     return squad.move(this.world, x, z, retreat);
   }
 
-  /** Units in a point's circle take it; helicopters can't (code/warrior.cpp: canCapture). */
+  /** Units in a point's circle take it; helicopters can't (code/warrior.cpp: canCapture), nor can buildings. */
   private capture(dt: number): void {
     const counts = this.points.map(() => [0, 0] as [number, number]);
     for (const u of this.world.units) {
-      if (!u.alive || !u.combat || u.embarked || u.pinned || u.flies || (u.team !== 0 && u.team !== 1)) continue;
+      if (!u.alive || !u.combat || u.embarked || u.pinned || u.flies || u.kind === 'structure' || (u.team !== 0 && u.team !== 1)) continue;
       this.points.forEach((p, i) => {
         if (Math.hypot(u.x - p.x, u.z - p.z) <= p.radius) counts[i]![u.team]!++;
       });
@@ -472,8 +474,8 @@ export class Match {
   /** The player sees only the enemies their side sees (and the wrecks of the ones it destroyed). */
   private fog(): void {
     const seen = this.world.battle.seenBy(PLAYER_TEAM);
-    // Aircraft (no stats) are seen from afar.
-    for (const u of this.world.units) u.hidden = u.team !== PLAYER_TEAM && u.alive && !!u.combat && !seen.has(u);
+    // Aircraft (no stats) are seen from afar, and walls are always there to see.
+    for (const u of this.world.units) u.hidden = u.team !== PLAYER_TEAM && u.alive && !!u.combat && !u.wall && !seen.has(u);
   }
 
   private judge(): void {
@@ -599,20 +601,48 @@ export class CommanderAI {
     const own = L.fobs.filter((f) => f.team === this.team);
     const target = this.match.capturable(this.team);
     const idle = !truck.route.length;
+    // A turret for the point it holds at the front comes first: it's cheap, and it keeps what's been won.
+    if (this.fortify(squad, truck, true)) return;
     if (target !== null && truck.supply >= L.spec.fobCost) {
       const p = this.match.points[target]!;
       const d = Math.hypot(side.base.x - p.x, side.base.z - p.z) || 1;
       const [sx, sz] = this.world.openNear(p.x + ((side.base.x - p.x) / d) * 220, p.z + ((side.base.z - p.z) / d) * 220, 'ground');
-      if (!own.some((f) => Math.hypot(f.x - sx, f.z - sz) < 400) && !L.whyNot(this.team, sx, sz)) {
+      if (!own.some((f) => Math.hypot(f.x - sx, f.z - sz) < 400) && !L.whyNot(this.team, 'fob', sx, sz)) {
         if (!this.world.grids?.ground.connected(truck.x, truck.z, sx, sz)) this.match.airliftSquad(squad, sx, sz);
-        else L.orderBuild(squad, sx, sz);
+        else L.orderBuild(squad, 'fob', sx, sz);
         return;
       }
     }
+    if (this.fortify(squad, truck)) return;
     const goal = truck.supply < 100 ? side.base : own.filter((f) => f.supply < 1000).sort((a, b) => a.supply - b.supply)[0];
     if (!goal || !idle || Math.hypot(truck.x - goal.x, truck.z - goal.z) < 20) return;
     if (!this.world.grids?.ground.connected(truck.x, truck.z, goal.x, goal.z)) this.match.airliftSquad(squad, goal.x, goal.z);
     else squad.move(this.world, goal.x, goal.z);
+  }
+
+  /**
+   * Fortify the point it holds at the front, while the truck can drive there: two turrets in its circle (or only the
+   * first), then a stretch of wall across the way to it from the enemy. True if the truck is off to build one.
+   */
+  private fortify(squad: Squad, truck: SeaUnit, first = false): boolean {
+    const L = this.match.logistics!;
+    const hold = this.match.frontier(this.team);
+    if (hold === null) return false;
+    const p = this.match.points[hold]!;
+    const reach = (x: number, z: number) => !this.world.grids || this.world.grids.ground.connected(truck.x, truck.z, x, z);
+    const supply = truck.supply ?? 0;
+    if (L.standing(this.team, 'turret', p.x, p.z, p.radius + 30) < (first ? 1 : 2) && supply >= L.price('turret')) {
+      const a = Math.random() * Math.PI * 2;
+      const [x, z] = this.world.openNear(p.x + Math.sin(a) * p.radius * 0.5, p.z + Math.cos(a) * p.radius * 0.5, 'ground');
+      if (reach(x, z) && !L.whyNot(this.team, 'turret', x, z) && !L.orderBuild(squad, 'turret', x, z)) return true;
+    }
+    if (first) return false;
+    if (L.standing(this.team, 'wall', p.x, p.z, p.radius + 80) < 1 && supply >= L.price('wall')) {
+      const r = (L.facing(this.team, p.x, p.z) * Math.PI) / 180;
+      const [x, z] = this.world.openNear(p.x + Math.sin(r) * (p.radius + 20), p.z + Math.cos(r) * (p.radius + 20), 'ground');
+      if (reach(x, z) && !L.whyNot(this.team, 'wall', x, z) && !L.orderBuild(squad, 'wall', x, z)) return true;
+    }
+    return false;
   }
 
   /**
@@ -629,8 +659,8 @@ export class CommanderAI {
       if (call === 'sensor' || !stats || S.readyIn(this.team, call) > 0) continue;
       const seen = this.known().filter((u) => u.alive && !u.embarked);
       const own = this.world.units.filter((u) => u.team === this.team && u.alive && u.combat && !u.embarked);
-      // Helicopters in the air are out of a strike's reach.
-      const worth = (u: SeaUnit) => (u.flies && u.flight !== 'parked' ? 0 : u.kind === 'mech' ? 3 : u.kind === 'infantry' ? 1 : 2);
+      // Helicopters in the air are out of a strike's reach, and walls aren't worth one.
+      const worth = (u: SeaUnit) => (u.wall || (u.flies && u.flight !== 'parked') ? 0 : u.kind === 'mech' ? 3 : u.kind === 'infantry' ? 1 : 2);
       let best: SeaUnit | null = null;
       let bestScore = STRIKE_WORTH[call];
       for (const c of seen) {
