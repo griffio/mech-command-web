@@ -92,8 +92,8 @@ export abstract class Combatant {
   constructor(
     weapons: { def: WeaponDef; location: MechLocation | null }[],
     private readonly fullAmmo: Record<number, number>,
-    /** The pilot's gunnery: the chance to hit, percent. */
-    readonly gunnery: number,
+    /** The pilot's gunnery: the chance to hit, percent (the difficulty can raise it during a match). */
+    public gunnery: number,
   ) {
     this.weapons = weapons.map((w) => ({ ...w, readyAt: 0, destroyed: false }));
     this.rearm(0);

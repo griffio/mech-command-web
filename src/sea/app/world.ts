@@ -367,6 +367,8 @@ export class World {
   battle!: Battle;
   /** The scenario's match, if one is being played. */
   match: Match | null = null;
+  /** Gunnery added to a side's pilots as they're spawned, by team (the difficulty, Match.setDifficulty). */
+  readonly gunneryBonus = new Map<number, number>();
   /** The player's orders to their squads, as they're given (the radio answers them). */
   onOrders: (reports: OrderReport[]) => void = () => {};
   /** An order that went to no squad, and why (nothing able to carry it out was selected). */
@@ -536,7 +538,8 @@ export class World {
       nodes: new Map(data.nodes.map((n, i) => [n.name, i])),
       modelPath: o.model,
     };
-    const combat = o.custom ? new VehicleCombat(o.custom, this.combatFile.weapons, o.gunnery) : this.combatant(o.kind, o.stats, o.gunnery);
+    const gunnery = o.gunnery + (this.gunneryBonus.get(o.team) ?? 0);
+    const combat = o.custom ? new VehicleCombat(o.custom, this.combatFile.weapons, gunnery) : this.combatant(o.kind, o.stats, gunnery);
     const unit = new SeaUnit(o.name, o.kind, o.team, body, combat, o.x, o.z, o.rotation);
     if (animator) {
       animator.play('idle', 0, Math.random() * 3); // out of step, so a lance does not breathe in unison

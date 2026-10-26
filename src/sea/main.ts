@@ -20,7 +20,7 @@ import { Terrain } from './sim/terrain/terrain';
 import { mc2TerrainGrid, upsampleGrid } from './app/mc2-map';
 import { BattleSounds } from './app/battle-sounds';
 import { Callouts } from './app/callouts';
-import { CommanderAI } from './app/match';
+import { CommanderAI, DIFFICULTY, type Difficulty, type Match } from './app/match';
 import { MatchHud } from './app/match-hud';
 import { Music } from './app/music';
 import { Notice } from './app/notice';
@@ -150,6 +150,7 @@ async function main() {
   if (world.match) {
     document.body.classList.add('match');
     const match = world.match;
+    mountDifficulty(match, notice);
     match.onEvent = (text, team) => {
       logEvent(text, team);
       if (match.winner !== null) setStatus(text);
@@ -496,6 +497,40 @@ function mountCapture(
 }
 
 /** The sound and music on/off buttons (remembered between visits). */
+const DIFFICULTY_KEY = 'mech-command:difficulty';
+
+/** Easy, Normal or Hard (top right), remembered: how well the enemy's pilots shoot, from now on. */
+function mountDifficulty(match: Match, notice: Notice): void {
+  const levels = Object.keys(DIFFICULTY) as Difficulty[];
+  const name = (d: Difficulty) => d.charAt(0).toUpperCase() + d.slice(1);
+  try {
+    const saved = localStorage.getItem(DIFFICULTY_KEY) as Difficulty | null;
+    if (saved && levels.includes(saved)) match.setDifficulty(saved);
+  } catch {
+    // No storage: the scenario as written.
+  }
+  const button = document.getElementById('difficulty') as HTMLButtonElement;
+  const show = () => {
+    button.textContent = name(match.difficulty);
+    button.setAttribute('aria-label', `Difficulty: ${name(match.difficulty)}`);
+  };
+  button.hidden = false;
+  document.getElementById('top-buttons')!.hidden = false;
+  show();
+  button.addEventListener('click', () => {
+    const next = levels[(levels.indexOf(match.difficulty) + 1) % levels.length]!;
+    match.setDifficulty(next);
+    try {
+      localStorage.setItem(DIFFICULTY_KEY, next);
+    } catch {
+      // Not remembered, then.
+    }
+    show();
+    const bonus = DIFFICULTY[next];
+    notice.show(bonus ? `${name(next)}: the enemy's pilots are ${bonus} points likelier to hit` : `${name(next)}: the enemy's pilots as the scenario has them`);
+  });
+}
+
 function mountAudioToggles(sound: Sound, music: Music | null): void {
   const toggle = (id: string, name: string, on: () => boolean, set: (on: boolean) => void) => {
     const button = document.getElementById(id) as HTMLButtonElement;

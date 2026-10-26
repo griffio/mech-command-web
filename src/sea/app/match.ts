@@ -63,6 +63,14 @@ const CLEAR_INFANTRY_S = 4;
 const STRIKE_WORTH: Record<CallIn, number> = { artillery: 4, airstrike: 6 };
 const CLEAR_WRECK_S = 150;
 
+/**
+ * How much better the AI's pilots shoot than the scenario has them, by the player's choice: gunnery points, which are the
+ * chance to hit itself. Easy is the scenario as written, where the player's pilots are the better (45 to 55 against 38
+ * to 42).
+ */
+export const DIFFICULTY = { easy: 0, normal: 5, hard: 10 } as const;
+export type Difficulty = keyof typeof DIFFICULTY;
+
 export const TEAM_COLOR: Record<number, string> = { 0: '#4fa3ff', 1: '#ff5a4a' };
 const RING_COLOR: Record<string, [number, number, number, number]> = {
   0: [0.3, 0.62, 1, 1],
@@ -112,6 +120,7 @@ export class Match {
   onEvent: (text: string, team: number) => void = () => {};
   onSignal: (signal: MatchSignal) => void = () => {};
   time = 0;
+  difficulty: Difficulty = 'easy';
   /** AI commanders, by team (the player's side has none, unless a test adds one). */
   readonly commanders = new Map<number, CommanderAI>();
   readonly airlift: Airlift;
@@ -188,6 +197,17 @@ export class Match {
 
   side(team: number): Side {
     return this.sides.find((s) => s.team === team)!;
+  }
+
+  /** The enemy's pilots shoot better or worse (see DIFFICULTY): those in the field now, and those yet to come. */
+  setDifficulty(difficulty: Difficulty): void {
+    const change = DIFFICULTY[difficulty] - DIFFICULTY[this.difficulty];
+    this.difficulty = difficulty;
+    for (const side of this.sides) {
+      if (side.team === PLAYER_TEAM) continue;
+      this.world.gunneryBonus.set(side.team, DIFFICULTY[difficulty]);
+      for (const u of this.world.units) if (u.team === side.team && u.combat) u.combat.gunnery += change;
+    }
   }
 
   /** The point a side can take next (the first beyond those it holds), or null. */

@@ -42,7 +42,8 @@ New:
 - `sim/move-grid.ts`: routes over MC2's movement map, one per way of moving (mechs wade the shallows, hovercraft cross
   water, ground units keep to land and fords), with connected regions to tell what can't be reached on foot.
 - `app/match.ts`: Advance and Secure on a scenario (`scenarios/*.json`): capture points, tickets, bases that
-  reinforce and refit, fog of war, infantry digging in, and the AI commander. `app/squads.ts`: squads (formation
+  reinforce and refit, fog of war, infantry digging in, the AI commander, and the difficulty (the enemy pilots'
+  gunnery; its button and memory in `main.ts`). `app/squads.ts`: squads (formation
   moves, attacks, strength). `app/airlift.ts`: the Karnov flying infantry, on its own landing and take-off clips.
   `app/suppression.ts`: fire landing near units suppresses them (worse aim) and pins soldiers down; its numbers.
   `app/support.ts`: artillery and air strikes called in on a spot: readiness, the marker and ring, the fighter's

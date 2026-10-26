@@ -93,7 +93,12 @@ and **Run** makes mechs run. **Airlift** and **Build FOB** appear when the
 selection has infantry or a supply truck: press one, then tap the ground.
 **Artillery** and **Air strike** call in a strike: press one, then tap where it
 should land (they show how long until they're ready again).
-**Music** and **Sound** (top right) turn each on or off.
+**Easy**, **Normal** or **Hard** (top right) is the difficulty: how well the
+enemy's pilots shoot. Easy is the scenario as written, where yours are the
+better pilots; Normal and Hard make the enemy's 5 and 10 points likelier to hit
+(a pilot's gunnery is their chance to hit). Tap it to change it: it takes effect
+at once, on the units already fighting too, and is remembered.
+**Music** and **Sound** next to it turn each on or off.
 
 ### Advance and Secure
 
@@ -207,9 +212,10 @@ HUD shows it those counts, as it shows you); if the landing zone turns hot on
 the way, the Karnov goes somewhere else. Infantry don't go in on a point you hold
 ahead of their mechs and vehicles: they dig in out of sight and wait, then go in
 with them. Played against itself (both sides then fight by its rules), a match
-runs about 9 to 10 minutes; your side won five of six such matches, by 15 to 64
+runs about 9 to 10 minutes; on Easy your side won five of six, by 15 to 64
 tickets, and Liao one by 16 (your pilots are the better: gunnery 45 to 55
-against Liao's 38 to 42). `?scenario=none` shows the mission's
+against Liao's 38 to 42). On Normal and Hard, Liao won four of six (three of
+each: too few to tell the two apart). `?scenario=none` shows the mission's
 own units instead (your lance is then its three mechs plus an Atlas and a
 Madcat), and `?speed=4` runs the world four times as fast (for testing).
 
