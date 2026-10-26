@@ -96,8 +96,9 @@ should land (they show how long until they're ready again).
 **Easy**, **Normal** or **Hard** (top right) is the difficulty: how well the
 enemy's pilots shoot. Easy is the scenario as written, where yours are the
 better pilots; Normal and Hard make the enemy's 5 and 10 points likelier to hit
-(a pilot's gunnery is their chance to hit). Tap it to change it: it takes effect
-at once, on the units already fighting too, and is remembered.
+(a pilot's gunnery is their chance to hit). The game starts on Normal, about an
+even fight. Tap it to change it: it takes effect at once, on the units already
+fighting too, and is remembered.
 **Music** and **Sound** next to it turn each on or off.
 
 ### Advance and Secure

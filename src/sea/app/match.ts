@@ -66,10 +66,12 @@ const CLEAR_WRECK_S = 150;
 /**
  * How much better the AI's pilots shoot than the scenario has them, by the player's choice: gunnery points, which are the
  * chance to hit itself. Easy is the scenario as written, where the player's pilots are the better (45 to 55 against 38
- * to 42).
+ * to 42). A new player starts on Normal, about an even fight (the AI against itself: Liao won 1 of 6 on Easy, 4 of 6 on
+ * Normal and Hard).
  */
 export const DIFFICULTY = { easy: 0, normal: 5, hard: 10 } as const;
 export type Difficulty = keyof typeof DIFFICULTY;
+export const DEFAULT_DIFFICULTY: Difficulty = 'normal';
 
 export const TEAM_COLOR: Record<number, string> = { 0: '#4fa3ff', 1: '#ff5a4a' };
 const RING_COLOR: Record<string, [number, number, number, number]> = {

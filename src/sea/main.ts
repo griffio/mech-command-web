@@ -20,7 +20,7 @@ import { Terrain } from './sim/terrain/terrain';
 import { mc2TerrainGrid, upsampleGrid } from './app/mc2-map';
 import { BattleSounds } from './app/battle-sounds';
 import { Callouts } from './app/callouts';
-import { CommanderAI, DIFFICULTY, type Difficulty, type Match } from './app/match';
+import { CommanderAI, DEFAULT_DIFFICULTY, DIFFICULTY, type Difficulty, type Match } from './app/match';
 import { MatchHud } from './app/match-hud';
 import { Music } from './app/music';
 import { Notice } from './app/notice';
@@ -503,12 +503,14 @@ const DIFFICULTY_KEY = 'mech-command:difficulty';
 function mountDifficulty(match: Match, notice: Notice): void {
   const levels = Object.keys(DIFFICULTY) as Difficulty[];
   const name = (d: Difficulty) => d.charAt(0).toUpperCase() + d.slice(1);
+  let start = DEFAULT_DIFFICULTY;
   try {
     const saved = localStorage.getItem(DIFFICULTY_KEY) as Difficulty | null;
-    if (saved && levels.includes(saved)) match.setDifficulty(saved);
+    if (saved && levels.includes(saved)) start = saved;
   } catch {
-    // No storage: the scenario as written.
+    // No storage: the default, then.
   }
+  match.setDifficulty(start);
   const button = document.getElementById('difficulty') as HTMLButtonElement;
   const show = () => {
     button.textContent = name(match.difficulty);
