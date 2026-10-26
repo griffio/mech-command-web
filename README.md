@@ -4,7 +4,9 @@ A small real-time tactics game for iPad and desktop browsers, built from
 MechCommander 2's maps, buildings, mechs, vehicles, infantry, voices and music.
 You command squads of mechs, infantry, an APC, helicopters and a supply truck in an
 Advance and Secure match after the game *Squad*: take the capture points in
-order, fly or drive infantry in to hold them, and build forward bases to fight from. No native
+order, fly or drive infantry in to hold them, build forward bases to fight from,
+and call in strikes and MC2's support units (an artillery piece, a scout, a
+minelayer). No native
 code: the original data is converted offline into glTF, WebP, PNG, JSON and AAC.
 
 - **The game** (`index.html`) draws with WebGPU: the FFT sea and physically based
@@ -94,7 +96,10 @@ infantry, and **Build FOB**, **Build turret** and **Build wall** when it has a
 supply truck: press one, then tap the ground.
 **Artillery** and **Air strike** call in a strike, and **Sensor probe** drops a
 probe: press one, then tap where it should land (they show how long until
-they're ready again).
+they're ready again). **Artillery piece**, **Scout** and **Minelayer** call in a
+support unit by VTOL: press one, then tap where it should set down. **Lay mines**
+appears when the selection has a minelayer: press it, then tap where it should
+lay them to.
 **Easy**, **Normal** or **Hard** (top right) is the difficulty: how well the
 enemy's pilots shoot. Easy is the scenario as written, where yours are the
 better pilots; Normal and Hard make the enemy's 5 and 10 points likelier to hit
@@ -215,6 +220,45 @@ simple AI commander.
   your tower picks the enemy up after a quiet minute, and when it's destroyed,
   in MC2's lines for those (the engine has the tower lines but never plays them).
   None of the Liao garrison's mechs carry sensors: it has its towers and probes.
+- **Support units.** MC2's support menu also sends units, each brought by its
+  VTOL (`tgl/vtol`, on its own drop-off animation): press **Artillery piece**,
+  **Scout** or **Minelayer** and tap open ground your squads can see. The VTOL
+  flies in from your base, sets the unit down about 5 seconds later and flies
+  off, and MC2's support desk says what's coming. Each comes as a squad of one
+  with its own card (Long Tom, Pegasus, Sapper), ordered like the others. MC2
+  buys them with resource points; here a side has one of each at a time, as
+  with strikes: the scout is ready 30 seconds in, the minelayer at 1½ minutes
+  and the artillery piece at 3, and another 2½, 4 and 5 minutes after the last
+  is lost (its button shows the wait, and hides while one is out).
+  - The **artillery piece** is MC2's guard tower (`objects/guardtower.fit`): a
+    40-tonne Long Tom that never moves and can't take a point. It shells what
+    your side sees from 60 to 180 m off (MC2's long range; its crew see 270 m,
+    a fifth further than most), one shell every 7 seconds, 50 in all. A shell
+    bursts where it lands, hit or miss, and everything on the ground within
+    37 m takes its 15 damage (MC2's area effect, `objects/longtom.fit`), yours
+    too: it holds fire while any of your units are that near its target. Its
+    armour is thin (22 to 30 a side), so keep it back. Betty warns when it's
+    attacked and when it's destroyed, in MC2's guard tower lines.
+  - The **scout** is MC2's scout helicopter (`objects/scoutcopter.fit`): 5
+    tonnes, a machine-gun array, and a pilot who sees 270 m. Send it ahead to
+    spot for strikes, LRMs and the Long Tom.
+  - The **minelayer** (`objects/minelayer.fit`): select it, press **Lay mines**
+    and tap where it should drive. As in MC2 it lays a mine in each cell of the
+    movement map it passes (one every half second), 160 in all; Betty says when
+    they're gone, and it loads more at a base as others refit. A mine goes off
+    under a mech or vehicle of more than 35 tonnes, doing 12 damage to a leg or
+    the front (the pilot says so), and a strike or Long Tom shell sets off the
+    mines about it; helicopters, soldiers and light machines pass over. Everyone
+    sees every mine (red rings), and routes don't go round them (MC2's mine
+    avoidance is compiled out): steering clear is up to you. Unlike MC2, a
+    side's own mines don't go off under its own units.
+  The AI calls them in too: the artillery piece 110 m behind the point it holds
+  at the front (on the far side from the enemy's way in), the scout to watch the
+  point it's attacking from 160 m short of it, and the minelayer to lay three
+  lines of mines across the way the enemy comes to the point it holds. Anything
+  that can't move (the artillery piece, a turret) picks its targets among those
+  its guns reach from where it stands, and a scout fires at what comes near but
+  goes after it only when ordered.
 - **Forward bases.** Each side has a logistics squad: MC2's repair truck,
   carrying its 500 refit points as supply. Select it, press **Build FOB** and
   tap a spot (red rings show where it can't go: within 300 m of your main base
@@ -251,8 +295,8 @@ simple AI commander.
   attacks, crippled mechs, ejecting pilots, kills and finished refits. They follow
   MC2's radio rules (`sound/radio.csv`): one voice at a time, the most urgent
   first, stale lines dropped. Betty, MC2's computer voice, announces points
-  taken, a forward base under attack or destroyed, supply run out, and the
-  result. A refused order also shows why in the middle of the screen, with MC2's
+  taken, a forward base or the artillery piece under attack or destroyed,
+  supply or mines run out, and the result. A refused order also shows why in the middle of the screen, with MC2's
   buzz, and the alarm sounds when the enemy starts taking one of your points.
   **Sound on/off** (top right) is remembered. On iPad, sound starts with the
   first tap and plays even with the silent switch on.
@@ -296,7 +340,11 @@ towers, and about half the strikes went in on enemies only sensors had picked
 up. With turrets and walls too, your side won two of three, by 26 and 45, and
 Liao one by 7: each side's truck put up two to six turrets a match (which made
 one to seven kills a side), and hardly any walls, as the spot in front of a
-point the AI holds is often water. A match can swing by 70 tickets, so a
+point the AI holds is often water. With support units too, your side won two
+of three, by 24 and 28, and Liao one by 29: each side called in two or three
+scouts, one or two minelayers and one or two artillery pieces a match, a Long
+Tom made up to six kills, and a side's mines went off under the enemy up to 11
+times. A match can swing by 70 tickets, so a
 handful of matches shows a trend at best. `?scenario=none` shows the mission's
 own units instead (your lance is then its three mechs plus an Atlas and a
 Madcat), and `?speed=4` runs the world four times as fast (for testing).

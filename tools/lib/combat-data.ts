@@ -21,6 +21,12 @@ export interface WeaponDef {
   streak: boolean;
   /** LRMs may fire without their own line of sight when a teammate sees the target. */
   indirect: boolean;
+  /**
+   * An area-effect weapon (the Long Tom: gamesys AreaEffectWeaponComponentIndex): hit or miss, its shell bursts where
+   * it lands and every unit within `radius` metres takes `damage`, in hits of `chunk` (its bolt's AreaEffectDamage and
+   * AreaEffectRadius, its hit explosion's DamageChunkSize). The shell flies at `speed` metres a second. Null for the rest.
+   */
+  area: { damage: number; radius: number; chunk: number; speed: number } | null;
 }
 
 export interface AmmoDef {
@@ -66,6 +72,8 @@ export interface MechStats {
   sensorRange: number;
   /** It carries an ECM suite: no enemy sensor picks it up (code/contact.cpp), only sight. */
   ecm: boolean;
+  /** Its sight range as a share of the usual ([MechProfile] LOSFactor: the scout helicopter's 1.2). */
+  losFactor: number;
   armor: Record<ArmorLocation, number>;
   structure: Record<MechLocation, number>;
   weapons: { id: number; location: MechLocation }[];
@@ -87,6 +95,10 @@ export interface VehicleStats {
   refitPoints: number;
   /** How far the turret turns either way, degrees (0: the hull must face the target). */
   turretYaw: number;
+  /** Its sight range as a share of the usual ([General] LOSFactor: the artillery piece's 1.2). */
+  losFactor: number;
+  /** Mines it carries to lay ([General] MineLayer: the minelayer's 160), 0 for anything else. */
+  mines: number;
   armor: Record<VehicleLocation, number>;
   structure: Record<VehicleLocation, number>;
   weapons: { id: number }[];
@@ -104,10 +116,14 @@ const VARIANT_ROWS = 97;
 const BASE_SENSOR_RANGE = 1;
 /** Ids of the LRM racks the game treats as indirect-fire weapons (gamesys.fit IndirectFireWeaponComponentIndex). */
 const INDIRECT_FIRE = new Set([120, 123, 130, 160]);
+/** Ids of the weapons whose shells burst over an area (gamesys.fit AreaEffectWeaponComponentIndex). */
+const AREA_EFFECT = new Set([160, 123]);
 
 export class ComponentTable {
   readonly weapons = new Map<number, WeaponDef>();
   readonly ammo = new Map<number, AmmoDef>();
+  /** Each weapon's Special FX ID: its row of objects/effects.csv. */
+  private readonly effects = new Map<number, number>();
   private readonly types = new Map<number, string>();
   private readonly sizes = new Map<number, number>();
   private readonly sensorRanges = new Map<number, number>();
@@ -136,8 +152,40 @@ export class ComponentTable {
           ammo: ammoType === '0' || ammoType === 'na' || !ammoId ? null : ammoId,
           streak: ammoType === 'st' || (parseInt(row[20] ?? '0', 10) & 1) === 1,
           indirect: INDIRECT_FIRE.has(id),
+          area: null,
         });
+        this.effects.set(id, parseInt(row[21] ?? '', 10));
       }
+    }
+  }
+
+  /**
+   * Read the area-effect weapons' blasts from their bolts (code/weaponbolt.cpp): the weapon's Special FX ID is a row of
+   * objects/effects.csv, whose object number (a line of objects/object2.rsp) is the bolt's file; the bolt's HitEffect is
+   * another row, naming the explosion, whose DamageChunkSize splits the damage into hits (code/carnage.cpp).
+   */
+  readAreaEffects(src: SourceData, worldUnitsPerMeter: number): void {
+    const rows = src
+      .text('objects/effects.csv')
+      .split(/\r?\n/)
+      .map((l) => l.split(','));
+    const objects = src.objectList();
+    // The effects table's first line is its heading; its rows follow in order.
+    const objectOf = (effect: number): Fit | null => {
+      const name = objects[Number(rows[effect + 1]?.[4])];
+      const rel = name ? src.actual(`objects/${name}`) : null;
+      return rel ? src.fit(rel) : null;
+    };
+    for (const id of AREA_EFFECT) {
+      const w = this.weapons.get(id);
+      const bolt = w ? objectOf(this.effects.get(id) ?? -1) : null;
+      if (!w || !bolt) continue;
+      const damage = bolt.num('BoltProjectileData', 'AreaEffectDamage');
+      const radius = bolt.num('BoltProjectileData', 'AreaEffectRadius') / worldUnitsPerMeter;
+      if (damage <= 0 || radius <= 0) continue;
+      const explosion = objectOf(bolt.num('BoltProjectileData', 'HitEffect', -1));
+      const chunk = explosion?.num('ExplosionData', 'DamageChunkSize', damage) || damage;
+      w.area = { damage, radius, chunk, speed: bolt.num('BoltProjectileData', 'Velocity') / worldUnitsPerMeter };
     }
   }
 
@@ -159,8 +207,8 @@ export class ComponentTable {
   }
 }
 
-/** Variant 0 of a mech's stats file. */
-export function readMechStats(csv: string, components: ComponentTable, air = false): MechStats {
+/** Variant 0 of a mech's stats file, with what its object file's [MechProfile] adds (see mechProfiles). */
+export function readMechStats(csv: string, components: ComponentTable, profile: MechProfile = { air: false, losFactor: 1 }): MechStats {
   const rows = parseCsv(csv);
   const cell = (r: number, c: number) => (rows[r - 1]?.[c - 1] ?? '').trim();
   const v = 0;
@@ -227,7 +275,8 @@ export function readMechStats(csv: string, components: ComponentTable, air = fal
     runSpeed: num(cell(7, 5)),
     torsoYaw: num(cell(9, 5)),
     torsoYawRate: num(cell(8, 5)),
-    air,
+    air: profile.air,
+    losFactor: profile.losFactor,
     sensorRange: Math.max(0, ...items.map(({ id }) => components.sensorRange(id))),
     ecm: items.some(({ id }) => components.type(id) === 'ECM'),
     armor,
@@ -238,19 +287,31 @@ export function readMechStats(csv: string, components: ComponentTable, air = fal
   };
 }
 
+/** What a mech's object file says of it beyond its stats file. */
+export interface MechProfile {
+  /** It flies: MC2's helicopters are mechs whose [MechProfile] has MoveType 1 (code/mover.h MOVETYPE_AIR). */
+  air: boolean;
+  /** [MechProfile] LOSFactor. */
+  losFactor: number;
+}
+
 /**
- * The mechs that fly, by appearance (which their stats file shares: mediumcopter.csv for AttackCopter.fit's
- * MediumCopter): MC2's helicopters are mechs whose object file has [MechProfile] MoveType 1 (code/mover.h MOVETYPE_AIR).
+ * The mechs' profiles, by appearance (which their stats file shares: mediumcopter.csv for AttackCopter.fit's
+ * MediumCopter), for those whose object files have one.
  */
-export function airMechs(src: SourceData): Set<string> {
-  const air = new Set<string>();
+export function mechProfiles(src: SourceData): Map<string, MechProfile> {
+  const profiles = new Map<string, MechProfile>();
   for (const name of src.objectList()) {
     const rel = name.toLowerCase().endsWith('.fit') ? src.actual(`objects/${name}`) : null;
     if (!rel) continue;
     const fit = src.fit(rel);
-    if (fit.num('MechProfile', 'MoveType') === 1) air.add(fit.str('ObjectType', 'AppearanceName').toLowerCase());
+    if (!fit.has('MechProfile')) continue;
+    profiles.set(fit.str('ObjectType', 'AppearanceName').toLowerCase(), {
+      air: fit.num('MechProfile', 'MoveType') === 1,
+      losFactor: fit.num('MechProfile', 'LOSFactor', 1) || 1,
+    });
   }
-  return air;
+  return profiles;
 }
 
 /** A ground vehicle's object file. */
@@ -277,6 +338,8 @@ export function readVehicleStats(fit: Fit, components: ComponentTable): VehicleS
     hover: fit.bool('General', 'HoverCraft'),
     refitPoints: Math.max(0, fit.num('General', 'RefitPoints')),
     turretYaw: fit.num('VehicleDynamics', 'MaxTurretYaw'),
+    losFactor: fit.num('General', 'LOSFactor', 1) || 1,
+    mines: Math.max(0, fit.num('General', 'MineLayer')),
     armor: Object.fromEntries(sections.map(([k, s]) => [k, fit.num(s, 'MaxArmorPoints')])) as Record<VehicleLocation, number>,
     structure: Object.fromEntries(sections.map(([k, s]) => [k, fit.num(s, 'CurInternalStructure', fit.num('InternalStructure', s, 1))])) as Record<
       VehicleLocation,
@@ -361,6 +424,8 @@ export function readTurretStats(fit: Fit, components: ComponentTable): { stats: 
       hover: false,
       refitPoints: 0,
       turretYaw: 360,
+      losFactor: fit.num('TurretData', 'LOSFactor', 1) || 1,
+      mines: 0,
       armor: Object.fromEntries(sides.map((s) => [s, 0])) as Record<VehicleLocation, number>,
       structure: Object.fromEntries(sides.map((s) => [s, hp])) as Record<VehicleLocation, number>,
       weapons,

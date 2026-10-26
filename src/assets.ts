@@ -104,11 +104,12 @@ export type {
   ScenarioLogistics,
   ScenarioPoint,
   ScenarioSide,
+  ScenarioDeploy,
   ScenarioSquad,
   ScenarioStrike,
   ScenarioSupport,
 } from '../tools/lib/scenario.ts';
-export type { BettyLine, Blast, Cue, Effect, RadioMessage, SoundFile } from '../tools/lib/sound.ts';
+export type { BettyLine, Blast, Cue, Effect, RadioMessage, SoundFile, SupportLine } from '../tools/lib/sound.ts';
 
 /** combat.json: the weapons and ammunition the map's units carry, and each unit type's armour and loadout. */
 export interface CombatFile {

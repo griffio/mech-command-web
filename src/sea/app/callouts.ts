@@ -1,13 +1,15 @@
 // What the player hears and reads as a match goes. Their squads answer orders over the radio in their pilots' voices
 // (MC2's lines: acknowledged, can't do that, can't get there) and call out contacts, attacks, being pinned down, enemy
-// strikes coming in, crippling damage, kills and finished refits. Betty announces points taken, forward bases under
-// attack or lost, supply run out, strikes ready, and the result, over the win or lose tune. Refused orders and alerts
-// also show in the middle of the screen, with MC2's buzz or alarm.
+// strikes coming in, mines, crippling damage, kills and finished refits. Betty announces points taken, forward bases
+// and the artillery piece (MC2's guard tower) under attack or lost, supply and mines run out, strikes ready, and the
+// result, over the win or lose tune; the support desk says what's on its way. Refused orders and alerts also show in
+// the middle of the screen, with MC2's buzz or alarm.
 //
 // MC2 says these lines when it does (code/tacordr.cpp, warrior.cpp, mech.cpp, mover.cpp); how often a squad repeats
 // itself is this project's own choice, so that a long fight isn't a running commentary.
-import type { RadioMessage } from '../../assets';
+import type { RadioMessage, SupportLine } from '../../assets';
 import type { Attacker } from './battle';
+import { DEPLOY_NAMES, type Deploy } from './deploy';
 import type { Fob } from './logistics';
 import type { Match, MatchSignal } from './match';
 import type { Music } from './music';
@@ -32,20 +34,24 @@ const CRIPPLED = 0.35;
 /** A squad that has lost this much reports when a refit has made it whole again. */
 const REFIT_REPORT_BELOW = 0.95;
 const WHOLE = 0.99;
-/** A squad says it's pinned down at most this often, seconds. */
+/** A squad says it's pinned down at most this often, seconds; that it's hitting mines, likewise. */
 const PINNED_QUIET_S = 20;
+const MINES_QUIET_S = 15;
+/** What the support desk says for each support unit on its way. */
+const SUPPORT_LINE: Record<Deploy, SupportLine> = { artilleryPiece: 'artillery', scout: 'scout', minelayer: 'minelayer' };
 const POLL_S = 0.25;
 
 export class Callouts {
   private readonly lastHit = new Map<Squad, number>();
   private readonly lastSeen = new Map<Squad, number>();
   private readonly lastKill = new Map<Squad, number>();
-  private readonly lastBaseAlert = new Map<Fob, number>();
+  private readonly lastBaseAlert = new Map<Fob | SeaUnit, number>();
   private readonly lastPointAlert = new Map<number, number>();
   private readonly crippled = new Set<SeaUnit>();
   private readonly damaged = new Set<Squad>();
   private readonly pinned = new Set<Squad>();
   private readonly lastPinned = new Map<Squad, number>();
+  private readonly lastMine = new Map<Squad, number>();
   private nextPoll = 0;
 
   constructor(
@@ -88,7 +94,7 @@ export class Callouts {
       this.refused(refused.map((q) => q.refused).join(' · '), done ? null : r.squad, r.order === 'move' ? 'moveBlocked' : 'illegalOrder');
     }
     if (!done) return;
-    if (done.order === 'move' || done.order === 'airlift' || done.order === 'build') this.sound?.effect('place');
+    if (done.order === 'move' || done.order === 'airlift' || done.order === 'build' || done.order === 'mines') this.sound?.effect('place');
     // MC2 answers an attack order either way, at even odds (tacordr.cpp).
     this.say(done.squad, done.order === 'attack' && Math.random() < 0.5 ? 'targetAck' : 'ack');
     const pinned = reports.filter((r) => !r.refused && r.order === 'move' && r.squad.pinned).map((r) => r.squad.name);
@@ -99,12 +105,14 @@ export class Callouts {
     if (u.team !== PLAYER_TEAM) return;
     const t = this.match.time;
     const fob = this.match.logistics?.fobs.find((f) => f.hq === u || f.turret === u);
-    if (fob) {
-      if (t - (this.lastBaseAlert.get(fob) ?? -Infinity) > BASE_ATTACK_QUIET_S) {
-        this.notice.show('Your forward base is under attack', 'alert');
+    // The artillery piece is MC2's guard tower: Betty has its lines.
+    const guard = fob ?? (u.squad?.support === 'artilleryPiece' ? u : null);
+    if (guard) {
+      if (t - (this.lastBaseAlert.get(guard) ?? -Infinity) > BASE_ATTACK_QUIET_S) {
+        this.notice.show(fob ? 'Your forward base is under attack' : 'Your artillery piece is under attack', 'alert');
         this.sound?.announce('baseAttacked');
       }
-      this.lastBaseAlert.set(fob, t);
+      this.lastBaseAlert.set(guard, t);
       return;
     }
     const q = u.squad;
@@ -159,6 +167,38 @@ export class Callouts {
         if (!own) return this.notice.show('Enemy sensor tower destroyed');
         this.notice.show('Your sensor tower was destroyed', 'alert');
         return this.sound?.announce('towerDestroyed');
+      case 'deployCalled':
+        if (!own) return;
+        this.notice.show(`${DEPLOY_NAMES[s.what]} on its way by VTOL`);
+        this.sound?.effect('place');
+        return this.sound?.support(SUPPORT_LINE[s.what]);
+      case 'deployed':
+        if (!own) return;
+        return this.notice.show(
+          s.what === 'minelayer'
+            ? `${s.squad.name} is down: select it and press Lay mines`
+            : s.what === 'scout'
+              ? `${s.squad.name} is down: send it ahead to see for the rest`
+              : `${s.squad.name} is down: its Long Tom shells what your side sees within 180 m`,
+        );
+      case 'deployReady':
+        if (own) this.notice.show(`${DEPLOY_NAMES[s.what]} ready`);
+        return;
+      case 'deployLost':
+        if (!own) return;
+        if (s.what !== 'artilleryPiece') return this.notice.show(`Your ${DEPLOY_NAMES[s.what].toLowerCase()} is lost`, 'alert');
+        this.notice.show('Your artillery piece was destroyed', 'alert');
+        return this.sound?.announce('baseDestroyed');
+      case 'minesGone':
+        if (!own) return;
+        this.notice.show(`${s.squad.name} has laid its last mine: send it to base to load more`, 'alert');
+        return this.sound?.announce('minesGone');
+      case 'mineHit': {
+        const q = s.unit.squad;
+        if (!own || !q || this.match.time - (this.lastMine.get(q) ?? -Infinity) < MINES_QUIET_S) return;
+        this.lastMine.set(q, this.match.time);
+        return this.say(q, 'hittingMines');
+      }
     }
   }
 
@@ -169,11 +209,13 @@ export class Callouts {
       // The enemy's probes go unseen.
       if (s.team !== PLAYER_TEAM) return;
       this.notice.show('Sensor probe down: red blips show what it picks up inside the ring, which shrinks as it fades');
-      return this.sound?.effect('place');
+      this.sound?.effect('place');
+      return this.sound?.support('probe');
     }
     if (s.team === PLAYER_TEAM) {
       this.notice.show(`${name} on the way: it hits everything inside the ring`);
-      return this.sound?.effect('place');
+      this.sound?.effect('place');
+      return this.sound?.support('airstrike');
     }
     if (!s.seen) return;
     this.notice.show(`Incoming enemy ${name.toLowerCase()}! Get clear of the red ring`, 'alert');
@@ -193,8 +235,8 @@ export class Callouts {
       if (!q) return;
       // A mech's pilot ejects as it goes down (a helicopter's goes down with it).
       if (unit.kind === 'mech' && !unit.flies) this.say(q, 'ejecting');
-      // Its soldiers all gone (an APC left over doesn't count).
-      if (!unit.carrier && !q.riders.length) this.notice.show(`${q.name} has been wiped out`, 'alert');
+      // Its soldiers all gone (an APC left over doesn't count); a support unit's loss has its own word.
+      if (!unit.carrier && !q.riders.length && !q.support) this.notice.show(`${q.name} has been wiped out`, 'alert');
       return;
     }
     // Soldiers fall too often to report each one.

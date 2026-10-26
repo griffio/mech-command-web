@@ -603,6 +603,8 @@ function structureStats(name: string, structure: number): VehicleStats {
     hover: false,
     refitPoints: 0,
     turretYaw: 0,
+    losFactor: 1,
+    mines: 0,
     armor: { front: 0, left: 0, right: 0, rear: 0, turret: 0 },
     structure: sides,
     weapons: [],

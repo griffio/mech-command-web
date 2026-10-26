@@ -382,6 +382,11 @@ body.match #help {
   touch-action: manipulation;
 }
 
+/* A support unit's card while none is out. */
+#squads .squad[hidden] {
+  display: none;
+}
+
 #squads .squad.selected {
   border-color: #6fe06f;
   background: rgb(30 60 36 / 90%);

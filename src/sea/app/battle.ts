@@ -3,8 +3,8 @@
 // way. Shots fly as they do in MC2 (lasers at once, shells and missiles at their speeds) and do their damage when they
 // land. Destroyed units fall, blow up and burn.
 import type { CombatEffects } from '../render/fx/combat-effects';
-import type { Blast, MechLocation, StrikeStats } from '../../assets';
-import { ATTACK_RADIUS, COMBAT_TICK, FIRE_ARC, SIGHT_RANGE, arcOf, bestRange, inRange, maxRange, type Arc, type HitReport, type WeaponMount } from '../sim/combat';
+import type { Blast, MechLocation, StrikeStats, WeaponDef } from '../../assets';
+import { ATTACK_RADIUS, COMBAT_TICK, FIRE_ARC, arcOf, bestRange, inRange, maxRange, type Arc, type HitReport, type WeaponMount } from '../sim/combat';
 import { Rng } from '../sim/rng';
 import { aimShare, settle, suppress, SUPPRESSION } from './suppression';
 import type { Squad } from './squads';
@@ -82,7 +82,9 @@ export type Noise =
   /** A helicopter taking off (`up`) or setting down. */
   | { kind: 'lift'; up: boolean; at: V3; on: SeaUnit }
   /** A strike on its way (5.5 s out, as the engine plays it), and each of its bursts as it lands. */
-  | { kind: 'incoming' | 'burst'; at: V3 };
+  | { kind: 'incoming' | 'burst'; at: V3 }
+  /** A VTOL flying support in (and out again), and setting it down (`drop`). */
+  | { kind: 'vtol'; drop: boolean; at: V3 };
 
 /** The arcs a strike's hits come from: any side, at random. */
 const ARCS: Arc[] = ['front', 'left', 'right', 'rear'];
@@ -90,6 +92,14 @@ const ARCS: Arc[] = ['front', 'left', 'right', 'rear'];
 const STRIKE_DUG_IN = 0.5;
 /** A strike's burst suppresses as a shot of this much damage (suppression.ts gives strikes their own reach). */
 const BURST_SUPPRESSION = { kind: 'missile', damage: 10, name: 'strike' } as const;
+/**
+ * The scenarios' rule (MC2's guns fire regardless): a Long Tom holds fire while any of its own side is within this of
+ * where its shell would burst, beyond the burst's own reach, metres.
+ */
+const AREA_CLEAR_M = 10;
+/** How high a Long Tom's shell climbs (its bolt's ArcEffect), metres: this, and a share of the distance. */
+const SHELL_LOFT_M = 15;
+const SHELL_LOFT_SHARE = 0.3;
 
 /** Damage on its way: it lands at `at` (game time) unless its target is already gone. */
 interface Payload {
@@ -123,6 +133,8 @@ interface Missile {
   lead: boolean;
   /** Game time of its next puff of smoke (lead missiles only). */
   smokeAt: number;
+  /** A Long Tom's shell (an area-effect weapon's): it bursts where it lands, on whoever is about. */
+  shell?: { weapon: WeaponDef; by: SeaUnit; target: SeaUnit };
 }
 
 interface Wreck {
@@ -228,7 +240,10 @@ export class Battle {
     this.judge();
   }
 
-  /** Who sees whom: within sight range, with no ground in between. A team shares what its units see. */
+  /**
+   * Who sees whom: within its sight range (a scout's is longer: SeaUnit.sightRange), with no ground in between. A team
+   * shares what its units see.
+   */
   private look(units: SeaUnit[]): void {
     this.seen.clear();
     this.sight.clear();
@@ -237,18 +252,20 @@ export class Battle {
       if (!this.seen.has(u.team)) this.seen.set(u.team, new Set());
     }
     const terrain = this.world.terrain;
+    const reach = units.map((u) => u.sightRange);
     for (let i = 0; i < units.length; i++) {
       const a = units[i]!;
       for (let j = i + 1; j < units.length; j++) {
         const b = units[j]!;
-        if (a.team === b.team || Math.hypot(a.x - b.x, a.z - b.z) > SIGHT_RANGE) continue;
+        const d = Math.hypot(a.x - b.x, a.z - b.z);
+        if (a.team === b.team || d > Math.max(reach[i]!, reach[j]!)) continue;
         if (terrain.blocked(a.x, a.eyeY, a.z, b.x, b.eyeY, b.z)) continue;
         // A wall is seen, but keeps no lookout.
-        if (!a.wall) {
+        if (!a.wall && d <= reach[i]!) {
           this.sight.get(a)!.add(b);
           this.seen.get(a.team)!.add(b);
         }
-        if (!b.wall) {
+        if (!b.wall && d <= reach[j]!) {
           this.sight.get(b)!.add(a);
           this.seen.get(b.team)!.add(a);
         }
@@ -279,8 +296,13 @@ export class Battle {
       return;
     }
     const seen = this.seen.get(u.team);
-    // Walls are shot at only when a unit is ordered to.
-    const near = (t: SeaUnit) => t.alive && !t.wall && !!seen?.has(t) && Math.hypot(t.x - u.x, t.z - u.z) <= ATTACK_RADIUS;
+    // Walls are shot at only when a unit is ordered to. One that can't move (an artillery piece, a turret) looks only
+    // at what its weapons reach from where it stands (the Long Tom can't fire under 60 m).
+    const reach = (d: number) => !u.immobile || u.combat!.weapons.some((w) => inRange(w.def.range, d));
+    const near = (t: SeaUnit) => {
+      const d = Math.hypot(t.x - u.x, t.z - u.z);
+      return t.alive && !t.wall && !!seen?.has(t) && d <= ATTACK_RADIUS && reach(d);
+    };
     if (u.target && near(u.target)) return;
     let best: SeaUnit | null = null;
     let bestD = Infinity;
@@ -310,7 +332,7 @@ export class Battle {
    * fire at what comes into range.
    */
   private close(u: SeaUnit): void {
-    if (u.kind === 'structure' || u.pinned) return; // turrets and tents stay put; pinned soldiers stay down
+    if (u.immobile || u.pinned) return; // turrets, tents and artillery pieces stay put; pinned soldiers stay down
     const t = u.target;
     const combat = u.combat!;
     const range = bestRange(combat);
@@ -348,7 +370,8 @@ export class Battle {
   /** Whether a unit goes after its target: on an attack order; or the enemy's, near where it was sent or within reach. */
   private hunting(u: SeaUnit, t: SeaUnit): boolean {
     if (u.attackOrder) return true;
-    if (!this.aiRun(u)) return false;
+    // A scout keeps its distance: it fires at what comes near, and goes after it only when ordered.
+    if (!this.aiRun(u) || u.squad?.support === 'scout') return false;
     const leashed = !u.leash || Math.hypot(t.x - u.leash.x, t.z - u.leash.z) <= LEASH_M;
     return leashed || (u.squad?.order.kind !== 'retreat' && this.within(u, t));
   }
@@ -448,6 +471,7 @@ export class Battle {
     for (const w of combat.weapons) {
       if (!combat.ready(w, this.time) || !inRange(w.def.range, d)) continue;
       if (!own && !(w.def.indirect && spotted)) continue;
+      if (w.def.area && this.friendsNear(u.team, t.x, t.z, w.def.area.radius + AREA_CLEAR_M)) continue;
       const hit = combat.fire(w, this.time, this.rng, this.hitModifier(t) * aimShare(u));
       this.launch(u, t, w, hit, d);
     }
@@ -464,7 +488,13 @@ export class Battle {
     const scale = Math.min(Math.max(def.damage / 4, 0.4), 2);
     const payload = (at: number, impact: boolean): Payload => ({ at, weapon: def, attacker: u, target: t, location, damage: def.damage, point, impact, scale });
     const name = def.name.toLowerCase();
-    if (def.kind === 'energy') {
+    if (def.area) {
+      // A Long Tom's shell, lobbed high and slow at the target, which it follows: it bursts where it lands, hit or miss.
+      this.fx.muzzleFlash(from, 2);
+      const arrive = this.time + (distance * 1.1) / def.area.speed;
+      const shell = { weapon: def, by: u, target: t };
+      this.missiles.push({ from, to: point, launch: this.time, arrive, loft: SHELL_LOFT_M + distance * SHELL_LOFT_SHARE, payload: null, hit, lead: true, smokeAt: this.time, shell });
+    } else if (def.kind === 'energy') {
       if (name.includes('ppc')) this.fx.ppc(from, point, hit);
       else this.fx.laser(from, point, laserColor(def.id), name.includes('large') ? 0.9 : 0.55, hit);
       if (!hit) this.fx.groundHit(point, 0.5, this.world.terrain.heightAt(point[0], point[2]) < 0);
@@ -519,6 +549,12 @@ export class Battle {
     this.fx.beginUpdate();
     let w = 0;
     for (const m of this.missiles) {
+      const t = m.shell?.target;
+      if (t?.alive) m.to = [t.x, Math.max(this.world.terrain.heightAt(t.x, t.z), 0), t.z];
+      if (this.time >= m.arrive && m.shell) {
+        this.shellLands(m.shell, m.to);
+        continue;
+      }
       if (this.time >= m.arrive) {
         if (!m.lead) this.fx.pop(m.to);
         else if (m.hit) this.fx.hit(m.to, 0.7);
@@ -582,23 +618,90 @@ export class Battle {
    * (helicopters only on the ground). It hits friend and foe alike.
    */
   bombard(x: number, z: number, s: StrikeStats, by: Attacker): void {
+    // Mines about it go off (code/artlry.cpp).
+    this.world.match?.mines.setOff(x, z, s.minorRange);
     if (this.immortal) return;
     for (const t of [...this.world.units]) {
-      if (!t.alive || !t.combat || t.embarked || t.altitude > 0 || (t.flies && t.flight !== 'parked')) continue;
+      if (!this.underBlast(t)) continue;
       const r = Math.hypot(t.x - x, t.z - z);
       if (r > s.minorRange || (t.kind === 'structure' && r > s.majorRange)) continue;
       const hits = r <= s.majorRange ? s.majorHits : s.minorHits;
       const damage = s.damage * (t.kind === 'infantry' && t.squad?.dugIn ? STRIKE_DUG_IN : 1);
-      for (let i = 0; i < hits && t.alive; i++) {
-        const arc = ARCS[Math.floor(this.rng.next() * ARCS.length)]!;
-        const report = t.combat.takeHit(t.combat.hitLocation(arc, this.rng), damage, this.rng);
-        if (!t.alive) this.destroyed(t, by, report);
-        else {
-          this.wounded(t, report, [t.x, t.instance.center[1], t.z]);
-          this.onHit(t, by);
-        }
-      }
+      for (let i = 0; i < hits && t.alive; i++) this.harm(t, this.strikeLocation(t), damage, by);
     }
+  }
+
+  /**
+   * A Long Tom's shell lands: it bursts on the target if it's still there (it followed it down), else where it was
+   * going. Every unit on the ground within the burst's reach takes its damage, in hits of its explosion's chunk size,
+   * each where a strike's hit would land (code/carnage.cpp, ExplosionType::handleCollision); friend and foe alike, and
+   * dug-in soldiers half, as for a strike. Mines about it go off.
+   */
+  private shellLands(shell: NonNullable<Missile['shell']>, to: V3): void {
+    const { weapon, by } = shell;
+    const area = weapon.area!;
+    const [x, z] = [to[0], to[2]];
+    const ground = this.world.terrain.heightAt(x, z);
+    const at: V3 = [x, Math.max(ground, 0) + 1.5, z];
+    this.fx.explosion(at, 1.4);
+    this.fx.groundHit(at, 1.4, ground < 0);
+    this.onNoise({ kind: 'impact', weapon: weapon.id, at, on: shell.target, by });
+    suppress(this.world.units, weapon, x, z, by, this.time, this.world.grid);
+    this.world.match?.mines.setOff(x, z, area.radius);
+    if (this.immortal) return;
+    for (const t of [...this.world.units]) {
+      if (!this.underBlast(t) || Math.hypot(t.x - x, t.z - z) > area.radius) continue;
+      const damage = area.damage * (t.kind === 'infantry' && t.squad?.dugIn ? STRIKE_DUG_IN : 1);
+      for (let left = damage; left > 0 && t.alive; left -= area.chunk) this.harm(t, this.strikeLocation(t), Math.min(area.chunk, left), by);
+    }
+  }
+
+  /**
+   * A mine goes off under a unit (code/mech.cpp, gvehicl.cpp mineCheck): its damage to a mech's legs (MC2's bottom hit
+   * section: either leg), or a vehicle's front (or its turret, as a shot with nobody behind it lands).
+   */
+  mine(t: SeaUnit, damage: number, by: Attacker): void {
+    const ground = this.world.terrain.heightAt(t.x, t.z);
+    const at: V3 = [t.x, Math.max(ground, 0) + 1, t.z];
+    this.fx.explosion(at, 0.6);
+    this.fx.groundHit(at, 0.8, ground < 0);
+    this.onNoise({ kind: 'blast', blast: 'mine', at, on: t });
+    if (!t.alive || !t.combat || this.immortal) return;
+    const location = t.kind === 'mech' ? (this.rng.next() < 0.5 ? 'LL' : 'RL') : t.combat.hitLocation('front', this.rng);
+    this.harm(t, location, damage, by, false);
+  }
+
+  /** A mine set off by a blast, with nobody on it. */
+  mineBurst(x: number, z: number): void {
+    const ground = this.world.terrain.heightAt(x, z);
+    const at: V3 = [x, Math.max(ground, 0) + 1, z];
+    this.fx.explosion(at, 0.5);
+    this.onNoise({ kind: 'burst', at });
+  }
+
+  /** Where a hit from no particular side lands (a strike's, a shell's burst): from a side at random. */
+  private strikeLocation(t: SeaUnit): string {
+    return t.combat!.hitLocation(ARCS[Math.floor(this.rng.next() * ARCS.length)]!, this.rng);
+  }
+
+  /** On the ground (or a helicopter parked there), where a blast reaches it. */
+  private underBlast(t: SeaUnit): boolean {
+    return t.alive && !!t.combat && !t.embarked && t.altitude <= 0 && !(t.flies && t.flight !== 'parked');
+  }
+
+  /** Damage to one location, and what comes of it; `heard` false keeps it off the radio's under-attack calls. */
+  private harm(t: SeaUnit, location: string, damage: number, by: Attacker, heard = true): void {
+    const report = t.combat!.takeHit(location, damage, this.rng);
+    if (!t.alive) this.destroyed(t, by, report);
+    else {
+      this.wounded(t, report, [t.x, t.instance.center[1], t.z]);
+      if (heard) this.onHit(t, by);
+    }
+  }
+
+  /** One of a side's units on the ground is within this of a point. */
+  private friendsNear(team: number, x: number, z: number, r: number): boolean {
+    return this.world.units.some((f) => f.team === team && this.underBlast(f) && Math.hypot(f.x - x, f.z - z) <= r);
   }
 
   /** A unit is killed outright, by whoever did it (soldiers aboard an APC that's destroyed: carriers.ts). */
@@ -621,6 +724,11 @@ export class Battle {
   /** A strike is on its way to (x, z): for the battle's sounds. */
   incoming(x: number, z: number): void {
     this.onNoise({ kind: 'incoming', at: [x, Math.max(this.world.terrain.heightAt(x, z), 0), z] });
+  }
+
+  /** A VTOL bringing support to (x, z), or setting it down there: for the battle's sounds. */
+  vtol(x: number, z: number, drop: boolean): void {
+    this.onNoise({ kind: 'vtol', drop, at: [x, Math.max(this.world.terrain.heightAt(x, z), 0), z] });
   }
 
   private destroyed(t: SeaUnit, by: Attacker, report: HitReport): void {

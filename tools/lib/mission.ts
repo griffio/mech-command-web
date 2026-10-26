@@ -202,12 +202,14 @@ export function walks(spec: ModelSpec): boolean {
 }
 /**
  * Aircraft whose clips carry their own flight (by appearance: its [Animation:N] in order): the Karnov's hover, landing
- * and take-off, and the aerospace fighters' bombing run (MC2's air strikes).
+ * and take-off, the aerospace fighters' bombing run (MC2's air strikes), and the VTOL's flight in to drop a vehicle off
+ * and out again.
  */
 const AIRCRAFT_CLIPS: Record<string, string[]> = {
   karnov: ['hover', 'land', 'takeoff'],
   slayer: ['bombrun'],
   shilone: ['bombrun'],
+  vtol: ['dropoff'],
 };
 
 export interface ModelSpec {

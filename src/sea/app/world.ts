@@ -20,7 +20,7 @@ import type { SeaRenderer } from '../render/sea-renderer';
 import { parseGlb, type ModelData } from '../models/glb';
 import { AFFINE_FLOATS, Animator, mulAffine, placement, restPose } from '../models/pose';
 import type { StrikeStats, VehicleStats } from '../../assets.ts';
-import { FIRE_ARC, MechCombat, VehicleCombat } from '../sim/combat';
+import { FIRE_ARC, MechCombat, SIGHT_RANGE, VehicleCombat } from '../sim/combat';
 import { MoveGrid, type MoveClass } from '../sim/move-grid';
 import type { Terrain } from '../sim/terrain/terrain';
 import { Battle } from './battle';
@@ -54,6 +54,9 @@ const TYPE_NAMES: Record<string, string> = {
   apc1: 'APC',
   heavyapc: 'Troop transport',
   mediumautocannonturret: 'Autocannon turret',
+  guardtower: 'Artillery piece',
+  minelayer: 'Minelayer',
+  scoutcopter: 'Scout copter',
 };
 
 /** A structure (a turret, a forward base's tent) stays where it's put. */
@@ -89,7 +92,7 @@ export interface UnitBody {
   rest: Float32Array;
   info: MechInfo | null;
   scale: number;
-  /** Node index by name: weapon mounts, the cockpit, the torso joint. */
+  /** Node index by name, lower case (the models differ: joint_root, Joint_root): weapon mounts, the cockpit, the torso. */
   nodes: Map<string, number>;
   /** The GLB it was made from (its wreck is drawn from it too). */
   modelPath: string;
@@ -126,6 +129,10 @@ export class SeaUnit {
   /** A supply truck's load, and how much it holds (null for anything else). */
   supply: number | null = null;
   supplyCapacity: number | null = null;
+  /** A minelayer's mines, and how many it holds (null for anything else); laying them as it goes (mines.ts). */
+  mines: number | null = null;
+  minesCapacity: number | null = null;
+  laying = false;
   /** How suppressed it is by fire landing about it, 0..1 (suppression.ts), and when it last was (game time). */
   suppression = 0;
   suppressedAt = -Infinity;
@@ -211,6 +218,17 @@ export class SeaUnit {
     return this.moveClass === 'air';
   }
 
+  /** It never moves: a structure, or a vehicle with no speed (MC2's artillery piece, an emplacement). */
+  get immobile(): boolean {
+    const stats = this.combat?.stats;
+    return this.kind === 'structure' || (this.kind === 'vehicle' && !!stats && 'speed' in stats && stats.speed <= 0);
+  }
+
+  /** How far it sees, metres: the usual (gamesys MaxVisualRange) times its LOSFactor (code/team.cpp). */
+  get sightRange(): number {
+    return SIGHT_RANGE * (this.combat?.stats.losFactor ?? 1);
+  }
+
   /** A helicopter on the ground, or on its way up or down: it neither moves nor fires. */
   get grounded(): boolean {
     return this.flight !== 'flying' && this.flies;
@@ -237,7 +255,7 @@ export class SeaUnit {
 
   /** A node's position in the world, metres (null if the model has no such node). */
   nodePosition(name: string): V3 | null {
-    const k = this.nodes.get(name);
+    const k = this.nodes.get(name.toLowerCase());
     if (k === undefined) return null;
     const m = this.instance.matrices;
     const o = k * AFFINE_FLOATS;
@@ -300,6 +318,7 @@ export class SeaUnit {
   stop(): void {
     this.route = [];
     this.engaging = false;
+    this.laying = false;
     this.play('idle');
   }
 
@@ -327,7 +346,7 @@ export class SeaUnit {
    */
   get speed(): number {
     const stats = this.combat?.stats;
-    if (this.kind === 'structure') return 0;
+    if (this.immobile) return 0;
     if (this.kind === 'infantry') return stats && 'speed' in stats ? stats.speed : 5;
     if (this.kind === 'vehicle') return this.carrier && stats && 'speed' in stats ? stats.speed : VEHICLE_SPEED;
     return this.info?.clips[this.running ? 'run' : 'walk']?.startVelocity ?? 10;
@@ -428,7 +447,7 @@ export class SeaUnit {
 /** An order the player gave one of their squads, and whether it was carried out (if not, why not). */
 export interface OrderReport {
   squad: Squad;
-  order: 'move' | 'airlift' | 'attack' | 'stop' | 'build';
+  order: 'move' | 'airlift' | 'attack' | 'stop' | 'build' | 'mines';
   refused: string | null;
 }
 
@@ -620,7 +639,7 @@ export class World {
       rest,
       info: o.info,
       scale,
-      nodes: new Map(data.nodes.map((n, i) => [n.name, i])),
+      nodes: new Map(data.nodes.map((n, i) => [n.name.toLowerCase(), i])),
       modelPath: o.model,
       size: flies ? bodyRadius(data, rest) * scale : gpuModel.radius,
     };
@@ -653,9 +672,10 @@ export class World {
       gunnery: t.gunnery ?? gunnery,
     });
     unit.typeKey = type;
-    // A truck that carries refit points carries them as supply, full to begin with.
-    const refit = t.stats ? (this.combatFile.vehicles[t.stats]?.refitPoints ?? 0) : 0;
-    if (t.kind === 'vehicle' && refit > 0) unit.supply = unit.supplyCapacity = refit;
+    // A truck that carries refit points carries them as supply, full to begin with; a minelayer its mines.
+    const vehicle = t.stats && t.kind === 'vehicle' ? this.combatFile.vehicles[t.stats] : undefined;
+    if (vehicle && vehicle.refitPoints > 0) unit.supply = unit.supplyCapacity = vehicle.refitPoints;
+    if (vehicle && vehicle.mines > 0) unit.mines = unit.minesCapacity = vehicle.mines;
     return unit;
   }
 
@@ -664,6 +684,11 @@ export class World {
     const t = this.unitsFile.types?.[type];
     if (!t?.stats) return 0;
     return (t.kind === 'mech' ? this.combatFile.mechs[t.stats]?.tonnage : this.combatFile.vehicles[t.stats]?.tonnage) ?? 0;
+  }
+
+  /** The converter exported this scenario unit type. */
+  hasType(type: string): boolean {
+    return !!this.unitsFile.types?.[type];
   }
 
   typeKind(type: string): UnitKind {
@@ -681,6 +706,14 @@ export class World {
     // Its own name: the renderer shares models by name, and every ring is shaped to its own ground.
     const name = `marker-ring ${x} ${z} ${radius} ${width} ${color.join(',')}`;
     return this.sea.models.addModel(selectionRing(name, color, 1 - width / radius, radius, lift), { scale: 1, unlit: true, gain: 1.4, castsShadow: false });
+  }
+
+  /**
+   * A small flat ring `radius` metres across (a mine), one model however many stand on the ground; stand it with
+   * addMarker(model, x, z, 1).
+   */
+  smallMarker(name: string, color: [number, number, number, number], radius: number, inner = 0.4): Promise<GpuModel> {
+    return this.sea.models.addModel(selectionRing(name, color, inner, radius, () => 0.4), { scale: 1, unlit: true, gain: 1.2, castsShadow: false });
   }
 
   /** A scenario prop's GLB, by object file name or appearance (flags, sandbags, the Karnov), or null. */
@@ -983,14 +1016,31 @@ export class World {
     return this.orderSquadsMove(x, z, true);
   }
 
+  /** Send the selected squads' minelayers to a point, laying mines on their way. */
+  orderLayMines(x: number, z: number): void {
+    const squads = [...this.selectedSquads].filter((q) => q.minelayer);
+    if (!squads.length || !this.match) return this.onRefused('select a minelayer first');
+    this.onOrders(
+      squads.map((q) => {
+        const why = q.airborne ? `${q.name} is with the Karnov` : (q.minelayer!.mines ?? 0) < 1 ? `${q.name} has no mines left: send it to base to load more` : null;
+        return { squad: q, order: 'mines', refused: why ?? (this.match!.layMines(q, x, z) ? null : `${q.name} can't get there`) };
+      }),
+    );
+  }
+
   /**
    * Send the selected squads to a point, side by side across their line of advance (the squad nearest the point in the
    * middle), each in its own formation. Infantry that can't get there on foot (or are told to fly) are airlifted; those
    * with an APC ride in it when that's quicker.
    */
   private orderSquadsMove(x: number, z: number, airlift = false): number {
-    const squads = [...this.selectedSquads].filter((q) => q.alive.length);
-    if (!squads.length) return 0;
+    const selected = [...this.selectedSquads].filter((q) => q.alive.length);
+    // An artillery piece stays where it's put: it says so only when nothing else was sent.
+    const squads = selected.filter((q) => !q.immobile);
+    if (!squads.length) {
+      if (selected.length) this.onOrders(selected.map((q) => ({ squad: q, order: 'move', refused: `${q.name} is an emplacement: it can't move` })));
+      return 0;
+    }
     let cx = 0;
     let cz = 0;
     for (const q of squads) {
@@ -1203,7 +1253,7 @@ export class World {
  * radius takes in.
  */
 function bodyRadius(data: ModelData, rest: Float32Array): number {
-  const root = Math.max(data.nodes.findIndex((n) => n.name === 'joint_root'), 0) * AFFINE_FLOATS;
+  const root = Math.max(data.nodes.findIndex((n) => n.name.toLowerCase() === 'joint_root'), 0) * AFFINE_FLOATS;
   const [rx, ry, rz] = [rest[root + 3]!, rest[root + 7]!, rest[root + 11]!];
   let radius = 0;
   for (const p of data.primitives) {

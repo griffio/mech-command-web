@@ -52,6 +52,9 @@ New:
   bombing run, and the bursts (the damage is `Battle.bombard`, on MC2's rule); sensor probes are called the same way.
   `app/sensors.ts`: what each side's sensors pick up beyond sight (mechs' sensor components, forward bases' towers,
   probes), and the player's probe's ring.
+  `app/deploy.ts`: support units called in by VTOL (the artillery piece, the scout, the minelayer): readiness, the
+  VTOL's flight and drop, and each one's squad. `app/mines.ts`: minelayers laying mines, and mines going off.
+  The Long Tom's shells bursting over an area are `Battle.shellLands`.
   `app/logistics.ts`: supply trucks and what they build (forward bases, turrets, walls), supply, and the services bases
   give.
   `app/match-hud.ts`: the ticket and point bar, the squad cards, squad letters over the field, and sensor blips.

@@ -1,8 +1,10 @@
 // Squads: the units the commander orders as one. A squad moves in formation (each member routed to its own slot about
 // the destination), attacks as one (when its target falls, the target's squadmates are next), and is reinforced at its
 // side's base. Its members can be mechs, vehicles or infantry, and its spacing suits them. A squad of soldiers may have
-// an APC to carry them (carriers.ts); on foot, they have it follow on behind.
+// an APC to carry them (carriers.ts); on foot, they have it follow on behind. A side's support (an artillery piece, a
+// scout, a minelayer: deploy.ts) comes as a squad of one, by VTOL.
 import type { ScenarioSquad } from '../../assets';
+import type { Deploy } from './deploy';
 import type { SeaUnit, World } from './world';
 
 /** A squad this suppressed says so on its card. */
@@ -38,6 +40,10 @@ export class Squad {
   stillFor = 0;
   /** What a logistics squad's truck is busy with (building, unloading, filling up), for the HUD. */
   task: string | null = null;
+  /** The support it is (deploy.ts), which doesn't come back at a base when it's lost; null for the scenario's squads. */
+  support: Deploy | null = null;
+  /** A VTOL is bringing it. */
+  inbound = false;
 
   /** Its truck carries supply. */
   get isLogistics(): boolean {
@@ -52,6 +58,17 @@ export class Squad {
   get airliftable(): boolean {
     const alive = this.alive;
     return alive.length > 0 && alive.every((u) => u.kind === 'infantry' || (u.kind === 'vehicle' && u.moveClass === 'ground'));
+  }
+
+  /** Everyone left in it stays where it's put (an artillery piece). */
+  get immobile(): boolean {
+    const alive = this.alive;
+    return alive.length > 0 && alive.every((u) => u.immobile);
+  }
+
+  /** Its minelayer, while it has one. */
+  get minelayer(): SeaUnit | null {
+    return this.units.find((u) => u.alive && u.mines !== null) ?? null;
   }
 
   /** Everyone left in it flies (helicopters: they can't take a point). */
@@ -138,6 +155,7 @@ export class Squad {
   status(now: number): string {
     if (this.respawnAt !== null) return `back in ${Math.max(0, Math.ceil(this.respawnAt - now))} s`;
     const alive = this.alive;
+    if (!alive.length) return this.inbound ? 'on its way by VTOL' : this.support ? 'not called in' : 'wiped out';
     if (this.airborne) return alive.some((u) => u.embarked) ? 'airlifted' : 'awaiting the Karnov';
     if (this.ride) return this.ride === 'aboard' ? 'in the APC' : this.ride === 'boarding' ? 'boarding the APC' : 'waiting for the APC';
     if (this.isLogistics) {
@@ -150,6 +168,9 @@ export class Squad {
     if (alive.some((u) => u.target && u.combat && u.target.alive)) return 'fighting' + suppressed;
     if (this.order.kind === 'retreat') return 'falling back';
     if (alive.some((u) => u.flight === 'takingOff')) return 'taking off';
+    const layer = this.minelayer;
+    if (layer) return `${layer.laying ? 'laying mines' : layer.route.length ? 'moving' : 'holding'} · ${Math.floor(layer.mines ?? 0)} mines`;
+    if (this.immobile) return 'emplaced';
     if (alive.some((u) => u.route.length)) return 'moving';
     if (this.order.kind === 'attack') return 'attacking';
     if (alive.every((u) => u.flight === 'parked')) return 'landed';
@@ -163,7 +184,8 @@ export class Squad {
   move(world: World, x: number, z: number, retreat = false): number {
     this.order = retreat ? { kind: 'retreat', x, z } : { kind: 'move', x, z };
     const riders = this.riders;
-    const members = (riders.length ? riders : this.alive).sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
+    // An artillery piece stays where it's put.
+    const members = (riders.length ? riders : this.alive).filter((u) => !u.immobile).sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
     const slots = formationSlots(members.length, this.spacing);
     let routed = 0;
     members.forEach((u, i) => {
@@ -215,9 +237,10 @@ function go(world: World, u: SeaUnit, sx: number, sz: number, x: number, z: numb
   [sx, sz] = world.openNear(sx, sz, u.moveClass);
   const grid = world.gridFor(u);
   const route = grid ? grid.findPath(u.x, u.z, sx, sz) : [[sx, sz] as [number, number]];
-  // A move order ends an attack order; the squad still fires at what it passes.
+  // A move order ends an attack order (and a minelayer's laying); the squad still fires at what it passes.
   u.attackOrder = null;
   u.engaging = false;
+  u.laying = false;
   u.leash = { x, z };
   if (route) u.walkTo(route);
   else u.stop();

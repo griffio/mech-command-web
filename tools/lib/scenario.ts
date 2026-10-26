@@ -79,6 +79,30 @@ export interface ScenarioSupport {
   airstrike?: ScenarioStrike;
   /** A sensor probe: it picks up the enemy about the spot for a while (MC2's sensor strike). */
   sensor?: ScenarioStrike;
+  /** The appearance of the VTOL that brings the units below ("vtol"). */
+  vtol?: string;
+  /** MC2's guard tower: an artillery piece, a Long Tom that stays where it's put. */
+  artilleryPiece?: ScenarioDeploy;
+  /** MC2's scout: an unarmed helicopter that sees further than most. */
+  scout?: ScenarioDeploy;
+  /** MC2's minelayer: it lays mines where it's sent to. */
+  minelayer?: ScenarioDeploy;
+}
+
+/**
+ * A unit a side calls in (MC2's support menu), brought by VTOL to a spot its side can see. A side has one at a time:
+ * the next is ready a while after it's lost.
+ */
+export interface ScenarioDeploy {
+  /** Its type (a mech's stats file, or an object file: "guardtower", "scoutcopter", "minelayer"). */
+  unit: string;
+  /** Seconds into the match before the first, and after one is lost before the next. */
+  first: number;
+  cooldown: number;
+  /** Its crew's gunnery: the chance to hit, percent. */
+  gunnery: number;
+  /** Whose voice it talks in over the radio (sound/pilots/pilot1..pilot26). */
+  voice?: string;
 }
 
 /** Supply trucks and the forward bases they build (all object file names). */
@@ -128,6 +152,12 @@ export function scenarioNeeds(scenarios: Scenario[]): {
         if (!call) continue;
         strikes.add(call.strike.toLowerCase());
         if (call.bomber) appearances.add(call.bomber.toLowerCase());
+      }
+      if (s.support.vtol) appearances.add(s.support.vtol.toLowerCase());
+      for (const d of [s.support.artilleryPiece, s.support.scout, s.support.minelayer]) {
+        if (!d) continue;
+        units.add(d.unit.toLowerCase());
+        if (d.voice) voices.add(d.voice.toLowerCase());
       }
     }
     if (s.garrison) props.add(s.garrison.toLowerCase());

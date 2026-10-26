@@ -11,7 +11,8 @@
 // water; a squad with an APC rides it on long moves (carriers.ts). Infantry that stand still a while dig in
 // behind sandbags, and are much harder to hit. Fire pins soldiers down (suppression.ts): pinned, they don't count
 // toward taking a point. Supply trucks build forward bases where squads come back, reinforce and
-// refit nearer the front (logistics.ts). Sensors pick up the enemy beyond sight (sensors.ts).
+// refit nearer the front (logistics.ts). Sensors pick up the enemy beyond sight (sensors.ts). A side calls in strikes
+// (support.ts), and support units by VTOL: an artillery piece, a scout, a minelayer (deploy.ts, mines.ts).
 import type { Scenario, ScenarioSide } from '../../assets';
 import { PLAYER_PAINT, paintFromMission, type PaintScheme } from '../../paint.ts';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
@@ -19,7 +20,9 @@ import { SIGHT_RANGE, bestRange } from '../sim/combat';
 import { Airlift } from './airlift';
 import type { Attacker } from './battle';
 import { Carriers } from './carriers';
+import { DEPLOYS, Deployments, type Deploy } from './deploy';
 import { FOB_RADIUS, Logistics, type ServicePoint } from './logistics';
+import { Minefields } from './mines';
 import { Sensors } from './sensors';
 import { Squad } from './squads';
 import { CALL_INS, Support, type CallIn } from './support';
@@ -63,6 +66,18 @@ const INFANTRY_LEAD_M = 100;
 const CLEAR_INFANTRY_S = 4;
 /** What the AI wants under a strike before it calls one (see CommanderAI.callStrikes). */
 const STRIKE_WORTH: Record<Exclude<CallIn, 'sensor'>, number> = { artillery: 4, airstrike: 6 };
+/**
+ * Where the AI wants its support: the artillery piece this far behind the point it holds at the front, on the far side
+ * from the enemy's way in (its Long Tom reaches 180 m: over the point and the ground before it), its scout this far short of the point it's attacking (it
+ * sees 270 m), and its minelayer's lines of mines across the way the enemy comes to the point it holds: this many, this
+ * far apart beyond the point's circle, and this long, metres. It sends the minelayer home to load more below the least.
+ */
+const ARTILLERY_BACK_M = 110;
+const SCOUT_STANDOFF_M = 160;
+const MINE_LINES = 3;
+const MINE_LINE_GAP_M = 25;
+const MINE_LINE_HALF_M = 55;
+const MIN_MINES = 20;
 const CLEAR_WRECK_S = 150;
 
 /**
@@ -107,7 +122,14 @@ export type MatchSignal =
   | { kind: 'strikeReady'; team: number; call: CallIn }
   | { kind: 'strikeCalled'; team: number; call: CallIn; x: number; z: number; reach: number; seen: boolean }
   /** A side's sensor towers have picked up the enemy after a quiet while; a side's sensor tower was destroyed. */
-  | { kind: 'towerContact' | 'towerLost'; team: number };
+  | { kind: 'towerContact' | 'towerLost'; team: number }
+  /** A side's support unit: sent for, ready to be, lost; set down by its VTOL. */
+  | { kind: 'deployCalled'; team: number; what: Deploy; x: number; z: number }
+  | { kind: 'deployReady' | 'deployLost'; team: number; what: Deploy }
+  | { kind: 'deployed'; team: number; what: Deploy; squad: Squad }
+  /** A side's minelayer has laid its last mine; a side's unit has set off a mine. */
+  | { kind: 'minesGone'; team: number; squad: Squad }
+  | { kind: 'mineHit'; team: number; unit: SeaUnit };
 
 export interface Side {
   team: number;
@@ -139,6 +161,10 @@ export class Match {
   logistics: Logistics | null = null;
   /** Strikes the sides call in, when the scenario has them. */
   support: Support | null = null;
+  /** Support units the sides call in by VTOL, when the scenario has them. */
+  readonly deployments: Deployments | null = null;
+  /** The mines the sides' minelayers have laid. */
+  readonly mines: Minefields;
   /** The sandbags dug-in squads shelter behind (null if the converter didn't export them). */
   private garrisonModel: GpuModel | null = null;
   private readonly sandbags = new Map<Squad, ModelInstance>();
@@ -158,6 +184,7 @@ export class Match {
     this.carriers = new Carriers(world);
     this.carriers.onEvent = (text, team) => this.onEvent(text, team);
     this.sensors = new Sensors(world, this);
+    this.mines = new Minefields(world, this);
     this.sides = scenario.sides.map((s) => ({
       team: s.team,
       name: s.name,
@@ -167,6 +194,10 @@ export class Match {
       squads: s.squads.map((q, i) => new Squad(s.team, String.fromCharCode(65 + i), q)),
       spec: s,
     }));
+    if (scenario.support) {
+      this.deployments = new Deployments(world, this, scenario.support);
+      for (const side of this.sides) this.deployments.addSquads(side);
+    }
     const n = scenario.points.length;
     this.points = scenario.points.map((p, i) => ({
       ...p,
@@ -202,7 +233,8 @@ export class Match {
     for (const side of match.sides) {
       const ring = await world.markerRing(RING_COLOR[String(side.team)]!, side.base.x, side.base.z, BASE_RADIUS);
       world.addMarker(ring, side.base.x, side.base.z, 1);
-      await Promise.all(side.squads.map((squad, i) => match.deploy(side, squad, i)));
+      // Support units come later, by VTOL.
+      await Promise.all(side.squads.map((squad, i) => (squad.support ? null : match.deploy(side, squad, i))));
     }
     world.battle.onDestroyed = (u, by) => match.lost(u, by);
     world.battle.judgeOutcome = false;
@@ -251,6 +283,8 @@ export class Match {
     this.carriers.update(dt);
     this.logistics?.update(dt);
     this.support?.update(dt);
+    this.deployments?.update();
+    this.mines.update(dt);
     this.sensors.update(dt);
     this.capture(dt);
     this.garrison(dt);
@@ -279,11 +313,14 @@ export class Match {
     return squad.move(this.world, x, z, retreat);
   }
 
-  /** Units in a point's circle take it; helicopters can't (code/warrior.cpp: canCapture), nor can buildings. */
+  /**
+   * Units in a point's circle take it; helicopters can't (code/warrior.cpp: canCapture), nor can buildings or an
+   * artillery piece (which would hold it for good).
+   */
   private capture(dt: number): void {
     const counts = this.points.map(() => [0, 0] as [number, number]);
     for (const u of this.world.units) {
-      if (!u.alive || !u.combat || u.embarked || u.pinned || u.flies || u.kind === 'structure' || (u.team !== 0 && u.team !== 1)) continue;
+      if (!u.alive || !u.combat || u.embarked || u.pinned || u.flies || u.immobile || (u.team !== 0 && u.team !== 1)) continue;
       this.points.forEach((p, i) => {
         if (Math.hypot(u.x - p.x, u.z - p.z) <= p.radius) counts[i]![u.team]!++;
       });
@@ -317,6 +354,13 @@ export class Match {
         this.onSignal({ kind: 'captured', point: p, team: p.owner });
       }
     });
+  }
+
+  /** Send a squad's minelayer to a point, laying mines on its way (mines.ts). Returns how many of it have a way there. */
+  layMines(squad: Squad, x: number, z: number): number {
+    const routed = squad.move(this.world, x, z);
+    for (const u of squad.alive) if (u.mines !== null && u.mines >= 1 && u.route.length) u.laying = true;
+    return routed;
   }
 
   /** Fly a squad of infantry to a point, if the airlift can; false if it can't (it has no Karnov, or is flying). */
@@ -357,13 +401,14 @@ export class Match {
 
   /**
    * Wiped-out squads come back after a while, at the forward base nearest the front that can pay for them (else the
-   * main base). Squads at a base get their missing members back and refit: free at the main base, for supply at a
-   * forward one.
+   * main base); a support unit doesn't (another can be called in: deploy.ts). Squads at a base get their missing
+   * members back and refit: free at the main base, for supply at a forward one. A minelayer loads mines as it refits.
    */
   private supply(dt: number): void {
     for (const side of this.sides) {
       side.squads.forEach((squad, i) => {
         const alive = squad.alive;
+        if (squad.support && !alive.length) return;
         // Wiped out: its APC, if that's left, goes back to the base to meet it.
         if (!squad.riders.length && this.spawning === 0) {
           if (squad.respawnAt === null) {
@@ -381,7 +426,7 @@ export class Match {
         if (!point || alive.some((u) => u.embarked)) return;
         // Helicopters with nothing to do set down at a base (and take off again when they have).
         for (const u of alive) if (!u.target && !u.attackOrder) u.land();
-        if (!point.fob || this.logistics!.pay(point, this.logistics!.refitCost(alive) * dt)) for (const u of alive) u.combat?.refit(dt, REFIT_RATE);
+        if (!point.fob || this.logistics!.pay(point, this.logistics!.refitCost(alive) * dt)) for (const u of alive) refit(u, dt);
         else this.logistics!.short(point.fob, squad, 'refit');
         if (squad.missing > 0 && this.time >= squad.reinforceAt && this.spawning === 0) {
           const next = this.missingTypes(squad)[0]!;
@@ -435,7 +480,8 @@ export class Match {
     const facing = bearing(at, toward);
     // Squads stand side by side across the main base, facing the lane; at a forward base, about its tent.
     const across = ((facing + 90) * Math.PI) / 180;
-    const offset = at.fob ? (index % 3 - 1) * 20 : (index - (side.squads.length - 1) / 2) * 34;
+    const squads = side.squads.filter((q) => !q.support).length;
+    const offset = at.fob ? (index % 3 - 1) * 20 : (index - (squads - 1) / 2) * 34;
     const back = at.fob ? FOB_RADIUS * 0.5 : 0;
     const cx = at.x + Math.sin(across) * offset - Math.sin((facing * Math.PI) / 180) * back;
     const cz = at.z + Math.cos(across) * offset - Math.cos((facing * Math.PI) / 180) * back;
@@ -505,6 +551,12 @@ export class Match {
   }
 }
 
+/** A unit at a base refits; a minelayer loads mines too. */
+function refit(u: SeaUnit, dt: number): void {
+  u.combat?.refit(dt, REFIT_RATE);
+  if (u.mines !== null && u.minesCapacity) u.mines = Math.min(u.minesCapacity, u.mines + u.minesCapacity * REFIT_RATE * dt);
+}
+
 /** Somewhere to keep this far from. */
 interface Threat {
   x: number;
@@ -547,6 +599,8 @@ export class CommanderAI {
   private readonly sightings = new Map<SeaUnit, { x: number; z: number; at: number }>();
   /** Squads it has flying, and the goals they're for. */
   private readonly lifts = new Map<Squad, [number, number]>();
+  /** Its minelayer's work: the point it's mining the way to, the lines laid, and whether it's laying one. */
+  private readonly minePlan = new Map<Squad, { point: number; lines: number; laying: boolean }>();
 
   constructor(
     private readonly match: Match,
@@ -566,7 +620,10 @@ export class CommanderAI {
     for (const q of ready.filter((q) => q.isLogistics)) this.supplyRun(q);
     this.callStrikes();
     this.probe();
-    const squads = ready.filter((q) => !q.isLogistics);
+    this.callSupport(ready);
+    for (const q of ready.filter((q) => q.support === 'scout')) this.scout(q, target ?? hold);
+    for (const q of ready.filter((q) => q.support === 'minelayer')) this.mine(q, hold);
+    const squads = ready.filter((q) => !q.isLogistics && !q.support);
     const threats = this.threats();
     const attackers = Math.ceil(squads.length * 0.65);
     squads
@@ -692,6 +749,98 @@ export class CommanderAI {
     }
   }
 
+  /**
+   * Call in its support as it's ready, where its squads can see: the artillery piece behind the point it holds at the
+   * front, away from the enemy's way in (or on the point), the minelayer on the point (or with a squad of its, the one
+   * nearest home first, to drive there from), the scout with the squad nearest the point it's attacking.
+   */
+  private callSupport(ready: Squad[]): void {
+    const D = this.match.deployments;
+    if (!D) return;
+    const hold = this.match.frontier(this.team);
+    const target = this.match.capturable(this.team);
+    const goal = target === null ? null : this.match.points[target]!;
+    const toGoal = (q: Squad) => (goal ? Math.hypot(q.centroid()![0] - goal.x, q.centroid()![1] - goal.z) : 0);
+    const squads = ready.filter((q) => !q.support && !q.airborne && q.centroid());
+    for (const kind of DEPLOYS) {
+      if (!D.available(kind) || D.readyIn(this.team, kind) > 0) continue;
+      const spots: [number, number][] = [];
+      if (kind !== 'scout' && hold !== null) {
+        const p = this.match.points[hold]!;
+        const a = (this.towardEnemy(hold) * Math.PI) / 180;
+        const back = kind === 'artilleryPiece' ? ARTILLERY_BACK_M : 0;
+        spots.push([p.x - Math.sin(a) * back, p.z - Math.cos(a) * back], [p.x, p.z]);
+      }
+      if (kind === 'scout') spots.push(...squads.sort((a, b) => toGoal(a) - toGoal(b)).map((q) => q.centroid()!));
+      if (kind === 'minelayer') spots.push(...squads.sort((a, b) => toGoal(b) - toGoal(a)).map((q) => q.centroid()!));
+      for (const [x, z] of spots) if (!D.call(this.team, kind, x, z)) break;
+    }
+  }
+
+  /** Its scout watches the point it's attacking from short of it, on its own side; hurt badly, it goes home. */
+  private scout(squad: Squad, index: number | null): void {
+    const side = this.match.side(this.team);
+    if (squad.strength < 0.35) return this.send(squad, -1, side.base.x, side.base.z, true);
+    if (squad.assignment === -1 && squad.strength < 0.9) return;
+    if (index === null) return;
+    const p = this.match.points[index]!;
+    const d = Math.hypot(side.base.x - p.x, side.base.z - p.z) || 1;
+    const back = Math.min(SCOUT_STANDOFF_M, d);
+    this.send(squad, index, p.x + ((side.base.x - p.x) / d) * back, p.z + ((side.base.z - p.z) / d) * back, false);
+  }
+
+  /**
+   * Its minelayer lays lines of mines across the way the enemy comes to the point it holds at the front: to one end of
+   * a line, then along it, the next a little further out. Short of mines, it goes home to load, until it's full.
+   */
+  private mine(squad: Squad, hold: number | null): void {
+    const layer = squad.minelayer;
+    if (!layer || squad.airborne || layer.laying) return;
+    const side = this.match.side(this.team);
+    const mines = layer.mines ?? 0;
+    if (mines < MIN_MINES || (squad.assignment === -1 && mines < (layer.minesCapacity ?? 0))) {
+      this.minePlan.delete(squad);
+      if (squad.assignment !== -1 || (!layer.route.length && Math.hypot(layer.x - side.base.x, layer.z - side.base.z) > BASE_RADIUS * 0.7)) {
+        this.send(squad, -1, side.base.x, side.base.z, false);
+      }
+      return;
+    }
+    if (hold === null) return;
+    let plan = this.minePlan.get(squad);
+    if (!plan || plan.point !== hold) {
+      plan = { point: hold, lines: 0, laying: false };
+      this.minePlan.set(squad, plan);
+    }
+    // A line laid (or broken off).
+    if (plan.laying) {
+      plan.laying = false;
+      plan.lines++;
+    }
+    if (plan.lines >= MINE_LINES || layer.route.length) return;
+    const p = this.match.points[hold]!;
+    const a = (this.towardEnemy(hold) * Math.PI) / 180;
+    const off = p.radius + MINE_LINE_GAP_M * (plan.lines + 1);
+    const [cx, cz] = [p.x + Math.sin(a) * off, p.z + Math.cos(a) * off];
+    // Across the way: alternate ends, so each line starts where the last ended.
+    const w = plan.lines % 2 ? -1 : 1;
+    const ends = [-w, w].map((s) => this.world.openNear(cx + Math.cos(a) * MINE_LINE_HALF_M * s, cz - Math.sin(a) * MINE_LINE_HALF_M * s, 'ground'));
+    const [start, end] = [ends[0]!, ends[1]!];
+    squad.assignment = hold;
+    if (Math.hypot(layer.x - start[0], layer.z - start[1]) > 15) {
+      squad.move(this.world, start[0], start[1]);
+      return;
+    }
+    if (this.match.layMines(squad, end[0], end[1])) plan.laying = true;
+    else plan.lines++;
+  }
+
+  /** The bearing from a point toward the enemy: to the next point on the enemy's side, or the enemy's base. */
+  private towardEnemy(index: number): number {
+    const p = this.match.points[index]!;
+    const next = this.match.points[this.team === 0 ? index + 1 : index - 1];
+    return bearing(p, next ?? this.match.sides.find((s) => s.team !== this.team)!.base);
+  }
+
   /** The enemies it knows of now: those its side sees, and those its sensors pick up. */
   private known(): SeaUnit[] {
     return [...new Set([...this.world.battle.seenBy(this.team), ...this.match.sensors.sensed(this.team)])];
@@ -713,7 +862,7 @@ export class CommanderAI {
     const p = this.match.points[index]!;
     const c = squad.centroid();
     if (!(squad.isInfantry || squad.isAir) || !c || clearance([p.x, p.z], threats) >= 0) return false;
-    const armour = this.match.side(this.team).squads.filter((q) => !q.isInfantry && !q.isLogistics && !q.isAir);
+    const armour = this.match.side(this.team).squads.filter((q) => !q.isInfantry && !q.isLogistics && !q.isAir && !q.support);
     if (!armour.length) return false;
     const toPoint = (q: Squad) => {
       const at = q.centroid();

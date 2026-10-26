@@ -4,14 +4,15 @@
 //
 // The radio works as MC2's does (code/gamesound.cpp): one line at a time, the most urgent first, and a line not said
 // within its shelf life is dropped. A squad already waiting to say something more urgent doesn't queue a lesser line,
-// and a message somebody is already waiting to say isn't queued again (unless it's one of the most urgent). Betty
-// speaks on the same channel, ahead of all but the most urgent radio.
+// and a message somebody is already waiting to say isn't queued again (unless it's one of the most urgent). Betty, and
+// the support desk as the player's call for support goes out, speak on the same channel, ahead of all but the most
+// urgent radio.
 //
 // The battle's sounds are many: a few at most play at once, and when that many are playing a new sound takes the place
 // of the quietest only if it's louder.
 //
 // Browsers start sound only after the first tap or key, so nothing is queued before then.
-import { ASSET_ROOT, loadJson, type BettyLine, type Cue, type Effect, type RadioMessage, type SoundFile } from '../../assets';
+import { ASSET_ROOT, loadJson, type BettyLine, type Cue, type Effect, type RadioMessage, type SoundFile, type SupportLine } from '../../assets';
 
 const MAX_QUEUED = 8;
 const BETTY_PRIORITY = 1;
@@ -128,6 +129,8 @@ export class Sound {
       ...Object.values(f.weapons ?? {}).flatMap((w) => [w.fire?.file, w.hit?.file]),
       ...Object.values(f.blasts ?? {}).map((c) => c.file),
       ...Object.values(f.flight ?? {}).map((c) => c.file),
+      ...Object.values(f.support ?? {}),
+      ...Object.values(f.vtol ?? {}).map((c) => c.file),
     ].filter((p): p is string => !!p);
     for (const path of new Set(all)) await this.buffer(path);
   }
@@ -176,6 +179,13 @@ export class Sound {
     const file = this.file.betty[line];
     if (!file || !this.live) return;
     this.enqueue({ speaker: 'betty', message: `betty:${line}`, priority: BETTY_PRIORITY, expires: now() + BETTY_SHELF_S, file });
+  }
+
+  /** The support desk says what's on its way. */
+  support(line: SupportLine): void {
+    const file = this.file.support?.[line];
+    if (!file || !this.live) return;
+    this.enqueue({ speaker: 'support', message: `support:${line}`, priority: BETTY_PRIORITY, expires: now() + BETTY_SHELF_S, file });
   }
 
   /** Fetch and decode a long file (a tune) without keeping it: the caller decides how long to. */

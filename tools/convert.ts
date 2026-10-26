@@ -30,7 +30,7 @@ import {
   readMission,
   type ModelSpec,
 } from './lib/mission.ts';
-import { airMechs, ComponentTable, readGunnery, readMechStats, readStrike, readTurretStats, readVehicleStats, type MechStats, type VehicleStats } from './lib/combat-data.ts';
+import { ComponentTable, mechProfiles, readGunnery, readMechStats, readStrike, readTurretStats, readVehicleStats, type MechStats, type VehicleStats } from './lib/combat-data.ts';
 import { buildModel, TextureLibrary } from './lib/model.ts';
 import { readScenarios, scenarioNeeds } from './lib/scenario.ts';
 import { missionTune, soundSet } from './lib/sound.ts';
@@ -212,13 +212,14 @@ json(`${mapDir}/objects.json`, {
 // --- Combat data ---------------------------------------------------------------
 // Weapons from the component table; each mech's stats file (its CSVFile); each vehicle's object file; pilots' gunnery.
 const components = new ComponentTable(src.text('objects/compbas.csv'));
-const flying = airMechs(src);
+components.readAreaEffects(src, WORLD_UNITS_PER_METER);
+const profiles = mechProfiles(src);
 const mechStats: Record<string, MechStats> = {};
 const vehicleStats: Record<string, VehicleStats> = {};
 const statsFor = (kind: 'mech' | 'vehicle', csv: string, fitName: string): string | null => {
   if (kind === 'mech') {
     const key = csv.toLowerCase();
-    if (!mechStats[key] && src.has(`objects/${key}.csv`)) mechStats[key] = readMechStats(src.text(`objects/${key}.csv`), components, flying.has(key));
+    if (!mechStats[key] && src.has(`objects/${key}.csv`)) mechStats[key] = readMechStats(src.text(`objects/${key}.csv`), components, profiles.get(key));
     return mechStats[key] ? key : null;
   }
   const key = fitName.replace(/\.fit$/i, '').toLowerCase();

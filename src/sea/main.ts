@@ -25,6 +25,7 @@ import { MatchHud } from './app/match-hud';
 import { Music } from './app/music';
 import { Notice } from './app/notice';
 import { Sound } from './app/sound';
+import { DEPLOYS, DEPLOY_NAMES, type Deploy } from './app/deploy';
 import type { BuildKind } from './app/logistics';
 import type { Squad } from './app/squads';
 import { CALL_IN_NAMES, CALL_INS, type CallIn } from './app/support';
@@ -340,17 +341,21 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     if (p.cancelled || p.handled || Math.hypot(e.clientX - p.x, e.clientY - p.y) > SLOP_PX) return;
     const hit = pickAt(e.clientX, e.clientY);
     if (!hit) return;
-    // With Artillery, Air strike or Sensor probe pressed, the tap (on the ground or a unit) is where it lands.
-    if (mode && (CALL_INS as string[]).includes(mode)) {
+    // With Artillery, Air strike or Sensor probe pressed, the tap (on the ground or a unit) is where it lands; with one
+    // of the support buttons, where the VTOL sets that down.
+    if (mode && ((CALL_INS as string[]).includes(mode) || (DEPLOYS as string[]).includes(mode))) {
       const [x, z] = Array.isArray(hit) ? hit : [hit.x, hit.z];
-      const why = world.match?.support?.call(PLAYER_TEAM, mode as CallIn, x, z);
+      const why = (DEPLOYS as string[]).includes(mode)
+        ? world.match?.deployments?.call(PLAYER_TEAM, mode as Deploy, x, z)
+        : world.match?.support?.call(PLAYER_TEAM, mode as CallIn, x, z);
       if (why) callouts?.refused(why, null);
       return setMode(null);
     }
     if (Array.isArray(hit)) {
       // With Airlift pressed, the tap is where the Karnov drops the selected infantry; with a Build button, where the
-      // selected truck builds a forward base, a turret or a wall.
+      // selected truck builds a forward base, a turret or a wall; with Lay mines, where the minelayer lays them to.
       if (mode === 'airlift') world.orderAirlift(hit[0], hit[1]);
+      else if (mode === 'mines') world.orderLayMines(hit[0], hit[1]);
       else if (mode && buildButtons.has(mode as BuildKind)) world.orderBuild(mode as BuildKind, hit[0], hit[1]);
       else world.orderMove(hit[0], hit[1]);
       setMode(null);
@@ -361,6 +366,7 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
 
   const run = document.getElementById('cmd-run') as HTMLButtonElement;
   const airlift = document.getElementById('cmd-airlift') as HTMLButtonElement;
+  const mines = document.getElementById('cmd-mines') as HTMLButtonElement;
   const buildButtons = new Map<BuildKind, HTMLButtonElement>([
     ['fob', document.getElementById('cmd-build') as HTMLButtonElement],
     ['turret', document.getElementById('cmd-turret') as HTMLButtonElement],
@@ -368,23 +374,35 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
   ]);
   // Airlift and the Build buttons are modes for the next tap on the ground (pressing one lets go of the other): while
   // one waits, the notice says what to tap, and for a build red rings show where it can't go.
-  let mode: 'airlift' | BuildKind | CallIn | null = null;
+  let mode: 'airlift' | 'mines' | BuildKind | CallIn | Deploy | null = null;
   const strikeButtons = new Map(CALL_INS.map((c) => [c, document.getElementById(`cmd-${c}`) as HTMLButtonElement]));
+  const deployButtons = new Map(DEPLOYS.map((d) => [d, document.getElementById(`cmd-${d}`) as HTMLButtonElement]));
   const names = (pick: (q: Squad) => boolean) => [...world.selectedSquads].filter(pick).map((q) => q.name).join(' and ');
   function setMode(next: typeof mode): void {
     if (next === mode) return;
     mode = next;
     airlift.setAttribute('aria-pressed', String(mode === 'airlift'));
+    mines.setAttribute('aria-pressed', String(mode === 'mines'));
     for (const [kind, button] of buildButtons) button.setAttribute('aria-pressed', String(mode === kind));
     for (const [call, button] of strikeButtons) button.setAttribute('aria-pressed', String(mode === call));
+    for (const [kind, button] of deployButtons) button.setAttribute('aria-pressed', String(mode === kind));
     const strike = mode && (CALL_INS as string[]).includes(mode) ? world.match?.support?.stats(mode as CallIn) : null;
     const building = mode && buildButtons.has(mode as BuildKind) ? (mode as BuildKind) : null;
     const logistics = world.match?.logistics;
     void logistics?.showNoBuild(building ? PLAYER_TEAM : null, building ?? 'fob');
     const trucks = names((q) => q.isLogistics);
+    const layers = [...world.selectedSquads].map((q) => q.minelayer).filter((u) => u !== null);
     notice.hint(
       mode === 'airlift'
         ? `Tap where the Karnov should set ${names((q) => q.airliftable && !q.airborne)} down`
+        : mode === 'mines'
+          ? `Tap where ${names((q) => !!q.minelayer)} should drive to, laying a mine on every patch of ground on the way (${Math.floor(Math.max(...layers.map((u) => u.mines ?? 0)))} left): they go off under the enemy's mechs and heavy vehicles, not yours`
+        : mode === 'artilleryPiece'
+          ? `Tap where the VTOL should set the artillery piece down, on open ground your squads can see: its Long Tom shells what your side sees within its reach, and it never moves`
+        : mode === 'scout'
+          ? `Tap where the VTOL should set the scout copter down, on open ground your squads can see: it flies, and sees further than the rest`
+        : mode === 'minelayer'
+          ? `Tap where the VTOL should set the minelayer down, on open ground your squads can see; then select it and press Lay mines`
         : building === 'fob'
           ? `Tap where ${trucks} should build a forward base, outside the red rings`
           : building === 'turret'
@@ -402,6 +420,23 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     sound?.effect(mode === 'airlift' ? 'off' : 'on');
     setMode(mode === 'airlift' ? null : 'airlift');
   });
+  mines.addEventListener('click', () => {
+    sound?.effect(mode === 'mines' ? 'off' : 'on');
+    setMode(mode === 'mines' ? null : 'mines');
+  });
+  // The support buttons: a mode for the next tap, once it's ready.
+  for (const [kind, button] of deployButtons) {
+    button.addEventListener('click', () => {
+      const deployments = world.match?.deployments;
+      if (!deployments) return;
+      if (mode !== kind) {
+        const wait = deployments.readyIn(PLAYER_TEAM, kind);
+        if (wait > 0) return callouts?.refused(`${DEPLOY_NAMES[kind]} is ready in ${Math.ceil(wait)} s`, null);
+      }
+      sound?.effect(mode === kind ? 'off' : 'on');
+      setMode(mode === kind ? null : kind);
+    });
+  }
   for (const [kind, button] of buildButtons) {
     button.addEventListener('click', () => {
       if (mode !== kind) {
@@ -437,6 +472,18 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     offer(airlift, !!world.match?.airlift.available && squads.some((q) => q.airliftable && !q.airborne), 'airlift');
     const trucks = squads.some((q) => q.isLogistics && !q.airborne);
     for (const [kind, button] of buildButtons) offer(button, trucks && !!world.match?.logistics?.canBuild(PLAYER_TEAM, kind), kind);
+    offer(mines, squads.some((q) => (q.minelayer?.mines ?? 0) >= 1 && !q.airborne), 'mines');
+    // A support button, while none of that is out, shows how long until it's ready.
+    const deployments = world.match?.deployments;
+    for (const [kind, button] of deployButtons) {
+      const on = !!deployments?.available(kind) && !deployments.out(PLAYER_TEAM, kind);
+      offer(button, on, kind);
+      if (!deployments || !on) continue;
+      const wait = Math.ceil(deployments.readyIn(PLAYER_TEAM, kind));
+      const label = wait > 0 ? `${DEPLOY_NAMES[kind]} ${Math.floor(wait / 60)}:${String(wait % 60).padStart(2, '0')}` : DEPLOY_NAMES[kind];
+      if (button.textContent !== label) button.textContent = label;
+      button.classList.toggle('waiting', wait > 0);
+    }
     // A strike's button shows how long until it's ready.
     const support = world.match?.support;
     for (const [call, button] of strikeButtons) {

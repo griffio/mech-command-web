@@ -33,6 +33,7 @@ export const RADIO = {
   buildingDead: 'RADIO_BUILDING_DEAD',
   sensorContact: 'RADIO_SENSOR_CONTACT',
   underStrike: 'RADIO_UNDER_AIRSTRIKE',
+  hittingMines: 'RADIO_HITTING_MINES',
 } as const;
 export type RadioMessage = keyof typeof RADIO;
 
@@ -58,6 +59,8 @@ export const BETTY = {
   towerContact: 34,
   /** BETTY_SENS_TWR_DESTROYED (likewise). */
   towerDestroyed: 35,
+  /** BETTY_MINES_GONE: a minelayer has laid its last mine. */
+  minesGone: 52,
 } as const;
 export type BettyLine = keyof typeof BETTY;
 
@@ -74,9 +77,27 @@ export const EFFECTS = {
 } as const;
 export type Effect = keyof typeof EFFECTS;
 
+/**
+ * What the support desk says as a side's call for support goes out (mclib/sounds.h SUPPORT_*: code/missiongui.cpp plays
+ * one as a strike is called, or a VTOL sets off with a unit), by file under sound/pilots/support/.
+ */
+export const SUPPORT = {
+  airstrike: 'supp_airstrike.wav',
+  probe: 'supp_probe.wav',
+  artillery: 'supp_artillery.wav',
+  scout: 'supp_scout.wav',
+  minelayer: 'supp_minelayer.wav',
+} as const;
+export type SupportLine = keyof typeof SUPPORT;
+
+/** The VTOL that brings a side's support in: its flight in and out, and setting the unit down (mclib/sounds.h). */
+const VTOL_BITES = { flight: 74, drop: 75 } as const;
+
 /** Things that blow up, and the explosion each gets. */
-export type Blast = 'mech' | 'vehicle' | 'structure' | 'crit' | 'strike' | 'helicopter';
-const BLAST_EFFECTS: Record<Exclude<Blast, 'structure' | 'strike' | 'helicopter'>, string> = {
+export type Blast = 'mech' | 'vehicle' | 'structure' | 'crit' | 'strike' | 'helicopter' | 'mine';
+/** A mine going off (mclib/sounds.h MINE_EXPLOSION). */
+const MINE_BITE = 99;
+const BLAST_EFFECTS: Record<Exclude<Blast, 'structure' | 'strike' | 'helicopter' | 'mine'>, string> = {
   mech: 'mech destruct explosion',
   vehicle: 'vehicle explosion',
   crit: 'mech critical hit explosion',
@@ -140,6 +161,9 @@ export interface SoundFile {
   blasts: Partial<Record<Blast, Cue>>;
   /** A helicopter taking off and landing. */
   flight?: Partial<Record<keyof typeof FLIGHT_BITES, Cue>>;
+  /** The support desk's lines, and the VTOL that brings support in. */
+  support?: Partial<Record<SupportLine, string>>;
+  vtol?: Partial<Record<keyof typeof VTOL_BITES, Cue>>;
   /** The tunes shipped, by number (null when the converter had no ffmpeg to encode them); `mission` is each mission's. */
   music: { tracks: Record<string, string>; mission: Record<string, number>; calm: number; combat: number[]; won: number; lost: number } | null;
 }
@@ -255,10 +279,22 @@ export function soundSet(
   if (strike) blasts.strike = strike;
   const helicopter = bite(HELICOPTER_BITE);
   if (helicopter) blasts.helicopter = helicopter;
+  const mine = bite(MINE_BITE);
+  if (mine) blasts.mine = mine;
   const flight: SoundFile['flight'] = {};
   for (const [key, n] of Object.entries(FLIGHT_BITES) as [keyof typeof FLIGHT_BITES, number][]) {
     const cue = bite(n);
     if (cue) flight[key] = cue;
+  }
+  const support: SoundFile['support'] = {};
+  for (const [key, file] of Object.entries(SUPPORT) as [SupportLine, string][]) {
+    const p = ship(`pilots/support/${file}`);
+    if (p) support[key] = p;
+  }
+  const vtol: SoundFile['vtol'] = {};
+  for (const [key, n] of Object.entries(VTOL_BITES) as [keyof typeof VTOL_BITES, number][]) {
+    const cue = bite(n);
+    if (cue) vtol[key] = cue;
   }
 
   // Tunes, encoded by the converter to AAC (the originals are MS ADPCM, which browsers don't all play).
@@ -272,7 +308,7 @@ export function soundSet(
     tracks[n] = out;
   }
   const music = { tracks, mission: { [mission.name]: mission.tune }, ...MUSIC, combat: [...MUSIC.combat] };
-  return { manifest: { radio, voices: voiceFiles, betty, effects, weapons, blasts, flight, music }, files, tunes };
+  return { manifest: { radio, voices: voiceFiles, betty, effects, weapons, blasts, flight, support, vtol, music }, files, tunes };
 }
 
 /** A key's number from whichever section of the file has it (MC2's object files put these in different ones). */

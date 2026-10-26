@@ -22,6 +22,28 @@
       "strike": "artsns",
       "first": 45,
       "cooldown": 180
+    },
+    "vtol": "vtol",
+    "artilleryPiece": {
+      "unit": "guardtower",
+      "first": 180,
+      "cooldown": 300,
+      "gunnery": 40,
+      "voice": "pilot2"
+    },
+    "scout": {
+      "unit": "scoutcopter",
+      "first": 30,
+      "cooldown": 150,
+      "gunnery": 35,
+      "voice": "pilot4"
+    },
+    "minelayer": {
+      "unit": "minelayer",
+      "first": 90,
+      "cooldown": 240,
+      "gunnery": 35,
+      "voice": "pilot6"
     }
   },
   "points": [

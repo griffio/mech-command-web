@@ -1,5 +1,6 @@
 // The match's HUD: both sides' tickets and the lane of capture points along the top (a tap on a point looks at it),
-// a card per squad of the player's along the bottom (a tap selects it, a second tap looks at it, shift adds), each
+// a card per squad of the player's along the bottom (a tap selects it, a second tap looks at it, shift adds; a support
+// unit's only while it's out or on its way), each
 // squad's letter floating over it in the world (the enemy's only while the player's side can see one of them), and a
 // red blip on each enemy the player's sensors pick up out of sight (sensors.ts).
 import type { Camera } from '../render/camera';
@@ -104,6 +105,9 @@ export class MatchHud {
       tag.textContent = a && b ? 'contested' : a ? `${a} of yours` : b ? `${b} enemy` : '';
     });
     for (const [squad, card] of this.cards) {
+      const away = !!squad.support && !squad.alive.length && !squad.inbound;
+      if (card.el.hidden !== away) card.el.hidden = away;
+      if (away) continue;
       card.el.classList.toggle('selected', this.world.selectedSquads.has(squad));
       card.el.classList.toggle('lost', !squad.riders.length);
       card.el.classList.toggle('pinned', squad.pinned);
