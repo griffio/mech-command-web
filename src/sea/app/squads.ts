@@ -32,7 +32,7 @@ export class Squad {
   respawnAt: number | null = null;
   /** Game time the next missing member joins while it's at its base. */
   reinforceAt = 0;
-  /** The AI commander's current job for it (a point index, or -1 to fall back to base). */
+  /** The AI commander's current job for it (a point index, -1 to fall back to base, -2 to go to be mended). */
   assignment: number | null = null;
   /** A Karnov is coming for it, or carrying it. */
   airborne = false;

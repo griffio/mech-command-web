@@ -78,20 +78,30 @@ const STRIKE_WORTH: Record<Exclude<CallIn, 'sensor'>, number> = { artillery: 4, 
 const ARTILLERY_BACK_M = 110;
 const SCOUT_STANDOFF_M = 160;
 /**
- * Its repair vehicle comes down, and waits, this far behind the point it holds at the front (at most this share of the
- * way back to its base), metres: its squads are seldom out of the fight while they're hurt, and a truck at the front is
- * soon shot up. It mends a squad that has lost at least this much (a share of one mech's armour and structure, over the
- * squad's mechs) that isn't fighting or falling back and has no enemy in sight within the second distance (beyond the
- * longest weapon's reach), calls the work off when that changes, and goes home to load below the points. It recovers a
- * mech only with no enemy it knows of within the last distance (one getting up is a sitting target, and costs tickets
- * again if it falls).
+ * Its repair vehicle comes down at a post, and waits there, out of the fight: about this far behind the point it holds
+ * at the front (at most this share of the way back to its base), metres, on ground clear of the enemy it has seen lately
+ * (as its landing zones are). Its squads are seldom out of the fight while they're hurt, so one of its mech squads that
+ * has lost this much (a share of one mech's armour and structure, summed over its mechs), though not enough to fall
+ * back to its base, pulls back to the post to be mended, when that's nearer than the base, one squad at a time; one
+ * that has lost the second share and passes within the third distance of the truck is mended too. The work is called
+ * off while the squad fights or an enemy is in sight within the fourth distance (beyond the longest weapon's reach), and
+ * a squad that has waited this long since it was sent, or since the truck last worked on it, gives up and goes back in.
+ * Below the points, the truck goes home to load.
+ *
+ * It recovers a mech only with no enemy it knows of within the last distance (one getting up is a sitting target, and
+ * costs tickets again if it falls).
  */
 const REPAIR_BACK_M = 300;
 const REPAIR_BACK_SHARE = 0.6;
+const REPAIR_PULL_BACK = 0.5;
 const REPAIR_NEED = 0.3;
+const REPAIR_NEAR_M = 120;
 const REPAIR_CLEAR_M = 200;
+const REPAIR_WAIT_S = 120;
 const MIN_REPAIR_POINTS = 60;
 const RECOVER_CLEAR_M = 200;
+/** A squad's assignment while it goes to the repair vehicle's post to be mended (a point's index; -1: its base). */
+const MENDING = -2;
 const MINE_LINES = 3;
 const MINE_LINE_GAP_M = 25;
 const MINE_LINE_HALF_M = 55;
@@ -655,6 +665,10 @@ export class CommanderAI {
   private readonly lifts = new Map<Squad, [number, number]>();
   /** Its minelayer's work: the point it's mining the way to, the lines laid, and whether it's laying one. */
   private readonly minePlan = new Map<Squad, { point: number; lines: number; laying: boolean }>();
+  /** Where its repair vehicle waits, and for which point (kept while it's clear of the enemy). */
+  private post: { hold: number; at: [number, number] } | null = null;
+  /** When each squad it pulled back to be mended was sent. */
+  private readonly mendSince = new Map<Squad, number>();
 
   constructor(
     private readonly match: Match,
@@ -678,17 +692,20 @@ export class CommanderAI {
     this.recover();
     for (const q of ready.filter((q) => q.support === 'scout')) this.scout(q, target ?? hold);
     for (const q of ready.filter((q) => q.support === 'minelayer')) this.mine(q, hold);
-    for (const q of ready.filter((q) => q.support === 'repairVehicle')) this.repair(q, ready, hold);
+    const truck = ready.find((q) => q.support === 'repairVehicle') ?? null;
+    if (truck) this.repair(truck, ready, hold);
     const squads = ready.filter((q) => !q.isLogistics && !q.support);
     const threats = this.threats();
     const attackers = Math.ceil(squads.length * 0.65);
     squads
       .sort((a, b) => b.strength - a.strength)
       .forEach((squad, i) => {
-        // Fall back when badly hurt; stay until whole again. A squad its repair vehicle is mending stays put.
+        // Fall back when badly hurt; stay until whole again. Less hurt, a mech squad goes to the repair vehicle, and
+        // stays put while it's mended.
         if (squad.airborne || this.match.repairs.beingMended(squad)) return;
         if (squad.assignment === -1 && (squad.missing > 0 || squad.strength < 0.9)) return;
         if (squad.strength < 0.35) return this.send(squad, -1, side.base.x, side.base.z, true);
+        if (this.toRepair(squad, truck)) return;
         const index = i < attackers || hold === null ? target : hold;
         if (index === null) return;
         const p = this.match.points[index]!;
@@ -855,9 +872,9 @@ export class CommanderAI {
   }
 
   /**
-   * Its repair vehicle mends the squad of its mechs that needs it most (away from the base, where they'd refit anyway),
-   * out of the fight, and calls the work off if the fight comes to it; it goes home to load when it's run low on points,
-   * and otherwise waits behind the point it holds at the front.
+   * Its repair vehicle waits at its post (see REPAIR_BACK_M) and mends the squads that come to it: those it pulled back,
+   * then any passing near with something to mend, the one that needs it most first (away from the base, where they'd
+   * refit anyway); it calls the work off if the fight comes to it, and goes home to load when it's run low on points.
    */
   private repair(truck: Squad, ready: Squad[], hold: number | null): void {
     const u = truck.repairer;
@@ -871,6 +888,8 @@ export class CommanderAI {
     };
     const mending = R.mending(truck);
     if (mending) {
+      // A squad's wait (see REPAIR_WAIT_S) counts from the last the truck worked on it.
+      if (mending.assignment === MENDING) this.mendSince.set(mending, this.match.time);
       if (threatened(mending)) truck.hold();
       return;
     }
@@ -881,14 +900,13 @@ export class CommanderAI {
       }
       return;
     }
-    const need = (q: Squad) => R.mendable(q).reduce((s, m) => s + 1 - (m.combat?.integrity ?? 1), 0);
-    const away = (q: Squad) => {
+    const near = (q: Squad) => {
       const c = q.centroid()!;
-      return Math.hypot(c[0] - side.base.x, c[1] - side.base.z) > BASE_RADIUS;
+      return Math.hypot(c[0] - u.x, c[1] - u.z) < REPAIR_NEAR_M && Math.hypot(c[0] - side.base.x, c[1] - side.base.z) > BASE_RADIUS;
     };
     const best = ready
-      .filter((q) => !q.support && !q.airborne && q.assignment !== -1 && q.centroid() && away(q) && !threatened(q))
-      .map((q) => ({ q, need: need(q) }))
+      .filter((q) => !q.support && !q.airborne && q.assignment !== -1 && q.centroid() && near(q) && !threatened(q))
+      .map((q) => ({ q, need: this.need(q) + (q.assignment === MENDING ? 1 : 0) }))
       .filter((e) => e.need >= REPAIR_NEED)
       .sort((a, b) => b.need - a.need)[0];
     if (best && !R.order(truck, best.q)) {
@@ -899,14 +917,56 @@ export class CommanderAI {
     if (at && !u.route.length) this.send(truck, hold!, at[0], at[1], false);
   }
 
-  /** Where its repair vehicle waits: back from the point it holds at the front, toward its base (null with none). */
+  /**
+   * Where its repair vehicle waits (see REPAIR_BACK_M; null with no point to hold). It stays put while it's clear of the
+   * enemy, unless the front moves.
+   */
   private repairPost(hold: number | null): [number, number] | null {
     if (hold === null) return null;
+    if (this.post?.hold === hold && clearance(this.post.at, this.threats()) >= 0) return this.post.at;
     const p = this.match.points[hold]!;
     const base = this.match.side(this.team).base;
     const d = Math.hypot(base.x - p.x, base.z - p.z) || 1;
     const back = Math.min(REPAIR_BACK_M, d * REPAIR_BACK_SHARE);
-    return this.world.openNear(p.x + ((base.x - p.x) / d) * back, p.z + ((base.z - p.z) / d) * back, 'ground');
+    const want = this.world.openNear(p.x + ((base.x - p.x) / d) * back, p.z + ((base.z - p.z) / d) * back, 'ground');
+    const lz = this.landingZone([base.x, base.z], want[0], want[1]);
+    this.post = { hold, at: lz?.safe ? lz.at : want };
+    return this.post.at;
+  }
+
+  /** What a squad's mechs have lost that a repair vehicle could mend: a share of one mech, summed over them. */
+  private need(squad: Squad): number {
+    return this.match.repairs.mendable(squad).reduce((s, m) => s + 1 - (m.combat?.integrity ?? 1), 0);
+  }
+
+  /**
+   * A mech squad hurt, though not badly enough to fall back to its base, goes to the repair vehicle's post to be mended
+   * (when that's nearer than the base, and no other squad is on its way there), and waits there for the truck (following
+   * the post if it moves), until it gives up (see REPAIR_WAIT_S). True while it's going there or waiting.
+   */
+  private toRepair(squad: Squad, truck: Squad | null): boolean {
+    const u = truck?.repairer;
+    const at = this.post?.at;
+    const open = !!u && !!at && !truck!.airborne && truck!.assignment !== -1 && (u.repairPoints ?? 0) >= MIN_REPAIR_POINTS;
+    if (squad.assignment === MENDING) {
+      const since = this.mendSince.get(squad) ?? -Infinity;
+      if (open && this.need(squad) >= 0.1 && this.match.time - since < REPAIR_WAIT_S) {
+        // The post moves with the front: a squad waiting at the old one goes on to the new.
+        this.send(squad, MENDING, at![0], at![1], true);
+        return true;
+      }
+      squad.assignment = null;
+      this.mendSince.delete(squad);
+      return false;
+    }
+    if (!open || this.need(squad) < REPAIR_PULL_BACK) return false;
+    if (this.match.side(this.team).squads.some((q) => q !== squad && q.assignment === MENDING && q.alive.length)) return false;
+    const c = squad.centroid()!;
+    const base = this.match.side(this.team).base;
+    if (Math.hypot(c[0] - at![0], c[1] - at![1]) >= Math.hypot(c[0] - base.x, c[1] - base.z)) return false;
+    this.mendSince.set(squad, this.match.time);
+    this.send(squad, MENDING, at![0], at![1], true);
+    return true;
   }
 
   /** Its scout watches the point it's attacking from short of it, on its own side; hurt badly, it goes home. */

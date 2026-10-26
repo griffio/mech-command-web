@@ -294,15 +294,19 @@ simple AI commander.
   at the front (on the far side from the enemy's way in), the scout to watch the
   point it's attacking from 160 m short of it, the minelayer to lay three
   lines of mines across the way the enemy comes to the point it holds, and the
-  repair vehicle well back from that point (300 m toward its base). It sends the
-  repair vehicle to the squad that needs it most, away from its base, that isn't
-  fighting or falling back and has no enemy in sight within 200 m (and calls it
-  off if that changes: its squads are seldom out of the fight while they're
-  hurt, so it mends little), sends it home to load when it's low, and has its
-  recovery team bring back the heaviest disabled mech it can see that has no
-  enemy it knows of within 200 m. Anything that can't move (the artillery piece, a turret) picks its
-  targets among those its guns reach from where it stands, and a scout fires at
-  what comes near but goes after it only when ordered.
+  repair vehicle at a post well back from that point (about 300 m toward its
+  base, on ground clear of the enemies it has seen lately). Its squads are seldom
+  out of the fight while they're hurt, so a mech squad that has lost half a
+  mech's worth of armour and structure, though not enough to go back to base,
+  pulls back to the truck to be mended, when that's nearer than the base (one
+  squad at a time, following the post as the front moves, and going back in
+  after two minutes without work on it). The truck mends those, and hurt squads
+  passing near; it calls the work off while the squad fights or an enemy is in
+  sight within 200 m, and goes home to load when it's low. The AI's recovery
+  team brings back the heaviest disabled mech it can see that has no enemy it
+  knows of within 200 m. Anything that can't move (the artillery piece, a
+  turret) picks its targets among those its guns reach from where it stands, and
+  a scout fires at what comes near but goes after it only when ordered.
 - **Forward bases.** Each side has a logistics squad: MC2's repair truck,
   carrying its 500 refit points as supply. Select it, press **Build FOB** and
   tap a spot (red rings show where it can't go: within 300 m of your main base
@@ -390,13 +394,15 @@ point the AI holds is often water. With support units too, your side won two
 of three, by 24 and 28, and Liao one by 29: each side called in two or three
 scouts, one or two minelayers and one or two artillery pieces a match, a Long
 Tom made up to six kills, and a side's mines went off under the enemy up to 11
-times. With the repair vehicle and recovery team as well, over nine matches
-(the AI's handling of the truck changed between them) your side won five and
-Liao four; on the final code your side won all three, by 53, 13 and 13. Each
-side's recovery team brought back one or two mechs a match, nearly always the
-enemy's (Liao's often your Atlas, the heaviest on the field), and a recovered
-mech made up to eight kills; the repair trucks mended little before strikes or
-fire caught them. A match can swing by 70 tickets, so a
+times. With the repair vehicle and recovery team as well, each side's recovery
+team brought back one or two mechs a match, mostly the enemy's (Liao's often
+your Atlas, the heaviest on the field), and a recovered mech made up to eleven
+kills. Sent to squads where they stood, the AI's repair trucks mended next to
+nothing (its hurt squads are nearly always fighting); pulling its squads back
+to the truck instead, each side's truck mended two to nine mechs a match, using
+up to all its 500 points, and strikes caught a truck at work now and then. With
+that, your side won two of three, by 47 and 27, and Liao one by a single ticket.
+A match can swing by 70 tickets, so a
 handful of matches shows a trend at best. `?scenario=none` shows the mission's
 own units instead (your lance is then its three mechs plus an Atlas and a
 Madcat), and `?speed=4` runs the world four times as fast (for testing).
