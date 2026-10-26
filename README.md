@@ -5,8 +5,9 @@ MechCommander 2's maps, buildings, mechs, vehicles, infantry, voices and music.
 You command squads of mechs, infantry, an APC, helicopters and a supply truck in an
 Advance and Secure match after the game *Squad*: take the capture points in
 order, fly or drive infantry in to hold them, build forward bases to fight from,
-and call in strikes and MC2's support units (an artillery piece, a scout, a
-minelayer). No native
+and call in strikes and MC2's support: an artillery piece, a scout, a
+minelayer, a repair vehicle, and a recovery team that brings knocked-out mechs
+back to fight for you. No native
 code: the original data is converted offline into glTF, WebP, PNG, JSON and AAC.
 
 - **The game** (`index.html`) draws with WebGPU: the FFT sea and physically based
@@ -96,10 +97,12 @@ infantry, and **Build FOB**, **Build turret** and **Build wall** when it has a
 supply truck: press one, then tap the ground.
 **Artillery** and **Air strike** call in a strike, and **Sensor probe** drops a
 probe: press one, then tap where it should land (they show how long until
-they're ready again). **Artillery piece**, **Scout** and **Minelayer** call in a
-support unit by VTOL: press one, then tap where it should set down. **Lay mines**
-appears when the selection has a minelayer: press it, then tap where it should
-lay them to.
+they're ready again). **Artillery piece**, **Scout**, **Minelayer** and
+**Repair vehicle** call in a support unit by VTOL: press one, then tap where it
+should set down. **Lay mines** appears when the selection has a minelayer: press
+it, then tap where it should lay them to; **Repair** when it has the repair
+vehicle: press it, then tap a squad of your mechs. **Recovery team**: press it,
+then tap the wreck of a disabled mech.
 **Easy**, **Normal** or **Hard** (top right) is the difficulty: how well the
 enemy's pilots shoot. Easy is the scenario as written, where yours are the
 better pilots; Normal and Hard make the enemy's 5 and 10 points likelier to hit
@@ -222,14 +225,16 @@ simple AI commander.
   None of the Liao garrison's mechs carry sensors: it has its towers and probes.
 - **Support units.** MC2's support menu also sends units, each brought by its
   VTOL (`tgl/vtol`, on its own drop-off animation): press **Artillery piece**,
-  **Scout** or **Minelayer** and tap open ground your squads can see. The VTOL
-  flies in from your base, sets the unit down about 5 seconds later and flies
-  off, and MC2's support desk says what's coming. Each comes as a squad of one
-  with its own card (Long Tom, Pegasus, Sapper), ordered like the others. MC2
-  buys them with resource points; here a side has one of each at a time, as
-  with strikes: the scout is ready 30 seconds in, the minelayer at 1½ minutes
-  and the artillery piece at 3, and another 2½, 4 and 5 minutes after the last
-  is lost (its button shows the wait, and hides while one is out).
+  **Scout**, **Minelayer** or **Repair vehicle** and tap open ground your squads
+  can see. The VTOL flies in from your base, sets the unit down about 5 seconds
+  later and flies off, and MC2's support desk says what's coming. Each comes as
+  a squad of one with its own card (Long Tom, Pegasus, Sapper, Wrench), ordered
+  like the others, and its crew talk in MC2's own voices for them. MC2 buys them
+  with resource points; here a side has one of each at a time, as with strikes:
+  the scout is ready 30 seconds in, the minelayer at 1½ minutes, the repair
+  vehicle at 2 and the artillery piece at 3, and another 2½, 4, 4½ and 5 minutes
+  after the last is lost (its button shows the wait, and hides while one is
+  out).
   - The **artillery piece** is MC2's guard tower (`objects/guardtower.fit`): a
     40-tonne Long Tom that never moves and can't take a point. It shells what
     your side sees from 60 to 180 m off (MC2's long range; its crew see 270 m,
@@ -252,13 +257,52 @@ simple AI commander.
     sees every mine (red rings), and routes don't go round them (MC2's mine
     avoidance is compiled out): steering clear is up to you. Unlike MC2, a
     side's own mines don't go off under its own units.
+  - The **repair vehicle** is MC2's repair truck (`objects/repairtruck.fit`,
+    the supply trucks' own), its 500 refit points for mending mechs in the
+    field. Select it, press **Repair** and tap a squad of your mechs: it drives
+    up to each mech that needs it in turn, nearest first, following the squad if
+    it's on the move. As in MC2 (`code/tacordr.cpp`), the mech powers down
+    within 30 m of it, and 3 seconds later the truck opens up and works on it,
+    each second spending up to 30 points: a third on armour and structure, a
+    point for a point, and a third on ammunition, a ton for a point. A powered-
+    down mech can't move or fire, so mend out of the fight. Lost arms stay lost,
+    and so do components a critical hit took out (a base mends those). Another
+    order to either squad calls the work off. Its pilots say when each mech is
+    done, and Betty when the squad is, or when the truck runs out of points; it
+    loads more at a base as others refit (in MC2 it's spent). MC2 mends mechs
+    only, so the truck does too.
+  - The **recovery team** is MC2's Karnov (`code/missiongui.cpp`). A mech on the
+    ground that falls to anything but its centre torso blown in at one blow
+    (its pilot killed, its head, legs or engine gone, its centre torso worn
+    through) is only disabled: it falls and smokes, its paint on, where one
+    blown apart burns out (helicopters always are). Press **Recovery team** and
+    tap such a wreck your squads can see, yours or the enemy's: a Karnov comes
+    in over it, hovers 5 seconds with its recovery beam on it (MC2's
+    `RecoverTime`), and flies off, leaving it mended (`Mover::recover`): its
+    structure whole but for arms it lost, every component working, its armour
+    and ammunition as they were, and a new pilot. It gets up and fights for you.
+    A mech of yours goes back to its squad if that's short of it, and gives back
+    the tickets it cost (as Squad's medics revive the fallen); any other joins
+    your Salvage squad (K), a lance at most, which is never reinforced. Strikes
+    and Long Tom shells that put more than 20 points of damage in all into a
+    disabled mech's wreck blow it apart (MC2's `DestructDamage`), and wrecks are
+    cleared away after 2½ minutes. The team is ready 4 minutes in, and again 6
+    minutes after each mech it brings back (at once, if the wreck was gone
+    before it got there). When a squad of yours disables an enemy mech while the
+    team is ready, its pilot says it's worth salvaging.
   The AI calls them in too: the artillery piece 110 m behind the point it holds
   at the front (on the far side from the enemy's way in), the scout to watch the
-  point it's attacking from 160 m short of it, and the minelayer to lay three
-  lines of mines across the way the enemy comes to the point it holds. Anything
-  that can't move (the artillery piece, a turret) picks its targets among those
-  its guns reach from where it stands, and a scout fires at what comes near but
-  goes after it only when ordered.
+  point it's attacking from 160 m short of it, the minelayer to lay three
+  lines of mines across the way the enemy comes to the point it holds, and the
+  repair vehicle well back from that point (300 m toward its base). It sends the
+  repair vehicle to the squad that needs it most, away from its base, that isn't
+  fighting or falling back and has no enemy in sight within 200 m (and calls it
+  off if that changes: its squads are seldom out of the fight while they're
+  hurt, so it mends little), sends it home to load when it's low, and has its
+  recovery team bring back the heaviest disabled mech it can see that has no
+  enemy it knows of within 200 m. Anything that can't move (the artillery piece, a turret) picks its
+  targets among those its guns reach from where it stands, and a scout fires at
+  what comes near but goes after it only when ordered.
 - **Forward bases.** Each side has a logistics squad: MC2's repair truck,
   carrying its 500 refit points as supply. Select it, press **Build FOB** and
   tap a spot (red rings show where it can't go: within 300 m of your main base
@@ -292,11 +336,13 @@ simple AI commander.
 - **Radio.** Your squads answer over the radio in MC2's pilots' voices (each squad
   its own, set in the scenario): acknowledging orders, refusing ones they can't
   carry out ("can't get there", an illegal order), and calling out new contacts,
-  attacks, crippled mechs, ejecting pilots, kills and finished refits. They follow
+  attacks, crippled mechs, ejecting pilots, kills, mechs worth salvaging, and
+  finished refits and repairs. They follow
   MC2's radio rules (`sound/radio.csv`): one voice at a time, the most urgent
   first, stale lines dropped. Betty, MC2's computer voice, announces points
   taken, a forward base or the artillery piece under attack or destroyed,
-  supply or mines run out, and the result. A refused order also shows why in the middle of the screen, with MC2's
+  supply, mines or refit points run out, repairs and recoveries done, and the
+  result. A refused order also shows why in the middle of the screen, with MC2's
   buzz, and the alarm sounds when the enemy starts taking one of your points.
   **Sound on/off** (top right) is remembered. On iPad, sound starts with the
   first tap and plays even with the silent switch on.
@@ -344,7 +390,13 @@ point the AI holds is often water. With support units too, your side won two
 of three, by 24 and 28, and Liao one by 29: each side called in two or three
 scouts, one or two minelayers and one or two artillery pieces a match, a Long
 Tom made up to six kills, and a side's mines went off under the enemy up to 11
-times. A match can swing by 70 tickets, so a
+times. With the repair vehicle and recovery team as well, over nine matches
+(the AI's handling of the truck changed between them) your side won five and
+Liao four; on the final code your side won all three, by 53, 13 and 13. Each
+side's recovery team brought back one or two mechs a match, nearly always the
+enemy's (Liao's often your Atlas, the heaviest on the field), and a recovered
+mech made up to eight kills; the repair trucks mended little before strikes or
+fire caught them. A match can swing by 70 tickets, so a
 handful of matches shows a trend at best. `?scenario=none` shows the mission's
 own units instead (your lance is then its three mechs plus an Atlas and a
 Madcat), and `?speed=4` runs the world four times as fast (for testing).

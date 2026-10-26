@@ -8,6 +8,8 @@ interface Playing {
   clip: ModelClip;
   time: number;
   loop: boolean;
+  /** Played backwards, from its end (MC2's Reverse animations: the repair truck closing up). */
+  reverse: boolean;
 }
 
 export class Animator {
@@ -42,21 +44,25 @@ export class Animator {
 
   /**
    * Switch to a clip, blending from the one playing over `fade` seconds. A clip that doesn't `loop` holds its last frame
-   * (from the first if `startTime` is past its end). Unknown names are ignored.
+   * (from the first if `startTime` is past its end); `reverse` plays it backwards, ending on its first frame. Unknown
+   * names are ignored.
    */
-  play(name: string, fade = 0.2, startTime = 0, loop = true): void {
+  play(name: string, fade = 0.2, startTime = 0, loop = true, reverse = false): void {
     const clip = this.model.clips.get(name);
-    if (!clip || name === this.clipName) return;
+    const playing = reverse ? `${name} reversed` : name;
+    if (!clip || playing === this.clipName) return;
     this.previous = this.current && fade > 0 ? this.current : null;
     this.fade = 0;
     this.fadeLength = fade;
-    this.current = { clip, time: loop ? startTime % Math.max(clip.duration, 1e-3) : Math.min(startTime, clip.duration), loop };
-    this.clipName = name;
+    const start = loop ? startTime % Math.max(clip.duration, 1e-3) : Math.min(startTime, clip.duration);
+    this.current = { clip, time: reverse ? clip.duration - start : start, loop, reverse };
+    this.clipName = playing;
   }
 
   /** A clip played once has reached its end. */
   get finished(): boolean {
-    return !!this.current && !this.current.loop && this.current.time >= this.current.clip.duration;
+    const c = this.current;
+    return !!c && !c.loop && (c.reverse ? c.time <= 0 : c.time >= c.clip.duration);
   }
 
   /** Turn one node (and so everything it carries) about the model's up axis, radians: a mech's torso twist. */
@@ -97,7 +103,8 @@ export class Animator {
 
 function advance(playing: Playing, dt: number): void {
   const length = Math.max(playing.clip.duration, 1e-3);
-  playing.time = playing.loop ? (playing.time + dt) % length : Math.min(playing.time + dt, length);
+  const step = playing.reverse ? -dt : dt;
+  playing.time = playing.loop ? (((playing.time + step) % length) + length) % length : Math.min(Math.max(playing.time + step, 0), length);
 }
 
 /** Rotate an affine matrix's axes about the y axis by `angle` radians, keeping its origin where it is. */

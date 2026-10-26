@@ -1,10 +1,11 @@
 // The fighting on the WebGPU page, on MC2's rules (sim/combat.ts): every quarter second each unit picks a target, keeps
 // to the distance it fights best from, and fires every weapon that is loaded, in range, in sight and pointing the right
 // way. Shots fly as they do in MC2 (lasers at once, shells and missiles at their speeds) and do their damage when they
-// land. Destroyed units fall, blow up and burn.
+// land. Destroyed units fall, blow up and burn; a mech that's only disabled (MC2's rule: anything but its centre torso
+// blown in at one blow) falls and smokes, its paint on, and can be recovered (recovery.ts) until blasts finish it off.
 import type { CombatEffects } from '../render/fx/combat-effects';
 import type { Blast, MechLocation, StrikeStats, WeaponDef } from '../../assets';
-import { ATTACK_RADIUS, COMBAT_TICK, FIRE_ARC, arcOf, bestRange, inRange, maxRange, type Arc, type HitReport, type WeaponMount } from '../sim/combat';
+import { ATTACK_RADIUS, COMBAT_TICK, FIRE_ARC, MechCombat, arcOf, bestRange, inRange, maxRange, type Arc, type HitReport, type WeaponMount } from '../sim/combat';
 import { Rng } from '../sim/rng';
 import { aimShare, settle, suppress, SUPPRESSION } from './suppression';
 import type { Squad } from './squads';
@@ -42,6 +43,8 @@ const CIRCLE_RANDOM_CELLS = 5;
 const ROUTES_PER_TICK = 2;
 /** Seconds a wreck burns. */
 const BURN_S = 40;
+/** A disabled mech's wreck that takes more than this from blasts is blown apart (gamesys DestructDamage's default). */
+const DESTRUCT_DAMAGE = 20;
 /** An AI unit chases only targets within this of where its squad was sent, metres. */
 const LEASH_M = 180;
 /**
@@ -84,7 +87,9 @@ export type Noise =
   /** A strike on its way (5.5 s out, as the engine plays it), and each of its bursts as it lands. */
   | { kind: 'incoming' | 'burst'; at: V3 }
   /** A VTOL flying support in (and out again), and setting it down (`drop`). */
-  | { kind: 'vtol'; drop: boolean; at: V3 };
+  | { kind: 'vtol'; drop: boolean; at: V3 }
+  /** A repair truck starting on a mech; the recovery team's Karnov coming in, and turning its beam on. */
+  | { kind: 'repair'; what: 'repair' | 'salvage' | 'beam'; at: V3 };
 
 /** The arcs a strike's hits come from: any side, at random. */
 const ARCS: Arc[] = ['front', 'left', 'right', 'rear'];
@@ -231,8 +236,8 @@ export class Battle {
     this.routes = 0;
     for (const u of units) {
       if (u.flies) this.lifting(u);
-      // Nothing to shoot with (a truck, an APC, a tent): nothing to aim at.
-      if (u.combat!.weapons.length) this.chooseTarget(u);
+      // Nothing to shoot with (a truck, an APC, a tent), or powered down: nothing to aim at.
+      if (u.combat!.weapons.length && u.power === 'on') this.chooseTarget(u);
       else u.target = null;
       this.close(u);
       this.shoot(u);
@@ -332,7 +337,8 @@ export class Battle {
    * fire at what comes into range.
    */
   private close(u: SeaUnit): void {
-    if (u.immobile || u.pinned) return; // turrets, tents and artillery pieces stay put; pinned soldiers stay down
+    // Turrets, tents and artillery pieces stay put; pinned soldiers stay down; a mech under repair stays powered down.
+    if (u.immobile || u.pinned || u.power !== 'on') return;
     const t = u.target;
     const combat = u.combat!;
     const range = bestRange(combat);
@@ -621,6 +627,7 @@ export class Battle {
     // Mines about it go off (code/artlry.cpp).
     this.world.match?.mines.setOff(x, z, s.minorRange);
     if (this.immortal) return;
+    this.scrap(x, z, s.minorRange, (r) => s.damage * (r <= s.majorRange ? s.majorHits : s.minorHits));
     for (const t of [...this.world.units]) {
       if (!this.underBlast(t)) continue;
       const r = Math.hypot(t.x - x, t.z - z);
@@ -649,6 +656,7 @@ export class Battle {
     suppress(this.world.units, weapon, x, z, by, this.time, this.world.grid);
     this.world.match?.mines.setOff(x, z, area.radius);
     if (this.immortal) return;
+    this.scrap(x, z, area.radius, () => area.damage);
     for (const t of [...this.world.units]) {
       if (!this.underBlast(t) || Math.hypot(t.x - x, t.z - z) > area.radius) continue;
       const damage = area.damage * (t.kind === 'infantry' && t.squad?.dugIn ? STRIKE_DUG_IN : 1);
@@ -721,6 +729,37 @@ export class Battle {
     suppress(this.world.units, BURST_SUPPRESSION, x, z, { team: -1 }, this.time, this.world.grid);
   }
 
+  /** A repair truck starting on a mech, or the recovery team's Karnov coming in or turning its beam on: for the sounds. */
+  repairSound(what: 'repair' | 'salvage' | 'beam', x: number, z: number): void {
+    this.onNoise({ kind: 'repair', what, at: [x, Math.max(this.world.terrain.heightAt(x, z), 0), z] });
+  }
+
+  /** The recovery team's beam, from the Karnov to the wreck, for a moment (it's drawn afresh while it's on). */
+  recoveryBeam(from: V3, to: V3): void {
+    this.fx.recoveryBeam(from, to);
+  }
+
+  /**
+   * A blast's damage to the disabled mechs' wrecks within its reach: too much, and a wreck is blown apart (code/mech.cpp,
+   * damageAfterDisabled against DestructDamage: no salvage).
+   */
+  private scrap(x: number, z: number, radius: number, damage: (r: number) => number): void {
+    for (const t of this.world.units) {
+      const r = Math.hypot(t.x - x, t.z - z);
+      if (!t.salvage || t.alive || r > radius) continue;
+      t.scrapDamage += damage(r);
+      if (t.scrapDamage <= DESTRUCT_DAMAGE) continue;
+      t.salvage = false;
+      const at = t.nodePosition('weapon_centertorso') ?? [...t.instance.center];
+      this.fx.explosion(at, 0.8);
+      this.onNoise({ kind: 'blast', blast: 'mech', at, on: t });
+      // It burns afresh, and is drawn burnt out.
+      const w = this.wrecks.find((w) => w.unit === t);
+      if (w) [w.since, w.drawn] = [this.time, false];
+      else this.wrecks.push({ unit: t, since: this.time, nextPuff: this.time, drawn: false });
+    }
+  }
+
   /** A strike is on its way to (x, z): for the battle's sounds. */
   incoming(x: number, z: number): void {
     this.onNoise({ kind: 'incoming', at: [x, Math.max(this.world.terrain.heightAt(x, z), 0), z] });
@@ -732,6 +771,9 @@ export class Battle {
   }
 
   private destroyed(t: SeaUnit, by: Attacker, report: HitReport): void {
+    // A helicopter is blown up (code/mech.cpp: no salvage); a mech on the ground only disabled, unless its centre torso
+    // was blown in at one blow.
+    t.salvage = t.kind === 'mech' && !t.flies && t.combat instanceof MechCombat && !t.combat.blownApart;
     t.die(arcOf(t.x, t.z, t.rotation, by.x, by.z) === 'front');
     this.world.unitDied(t);
     this.onDestroyed(t, by);
@@ -744,7 +786,7 @@ export class Battle {
     const at = t.nodePosition('weapon_centertorso') ?? [...t.instance.center];
     // A helicopter blows up as a vehicle does (code/mech.cpp: VEHICLE_EXPLOSION_ID).
     const mech = t.kind === 'mech' && !t.flies;
-    this.fx.explosion(at, mech ? 1 : 0.75);
+    this.fx.explosion(at, t.salvage ? 0.6 : mech ? 1 : 0.75);
     this.onNoise({ kind: 'blast', blast: t.flies ? 'helicopter' : mech ? 'mech' : t.kind === 'structure' ? 'structure' : 'vehicle', at, on: t });
     this.flights.delete(t);
     if (report.exploded) this.fx.explosion(at, 0.8);
@@ -753,23 +795,28 @@ export class Battle {
     this.onEvent(`${capital(side(by))}${by.name} destroyed ${side(t)}${t.name} (${t.combat!.dead})`, by.team);
   }
 
-  /** Wrecks burn for a while (fiercely at first), and are redrawn as burnt-out hulks once they've fallen. */
+  /**
+   * Wrecks burn for a while (fiercely at first), and are redrawn as burnt-out hulks once they've fallen. A disabled
+   * mech's smokes instead, and keeps its paint (it may yet be recovered).
+   */
   private burn(): void {
-    // A wreck is forgotten once it's burnt out and drawn as a hulk.
+    // A wreck is forgotten once it's burnt out and drawn as a hulk (or gone: a recovered mech's).
     for (let i = this.wrecks.length - 1; i >= 0; i--) {
       const w = this.wrecks[i]!;
-      if (w.drawn && this.time - w.since > BURN_S) this.wrecks.splice(i, 1);
+      if ((w.drawn && this.time - w.since > BURN_S) || !this.world.units.includes(w.unit)) this.wrecks.splice(i, 1);
     }
     for (const w of this.wrecks) {
       if (!w.drawn && w.unit.fallen) {
         w.drawn = true;
-        void this.world.makeWreck(w.unit);
+        if (!w.unit.salvage) void this.world.makeWreck(w.unit);
       }
       const age = this.time - w.since;
       if (age > BURN_S || this.time < w.nextPuff) continue;
-      w.nextPuff = this.time + 0.25;
+      w.nextPuff = this.time + (w.unit.salvage ? 0.35 : 0.25);
       const c = w.unit.instance.center;
-      this.fx.burning([c[0], c[1] - w.unit.size * 0.3, c[2]], 1.2 - (age / BURN_S) * 0.8);
+      const at: V3 = [c[0], c[1] - w.unit.size * 0.3, c[2]];
+      if (w.unit.salvage) this.fx.damaged(at, 0.9 - (age / BURN_S) * 0.5);
+      else this.fx.burning(at, 1.2 - (age / BURN_S) * 0.8);
     }
     // Live mechs that have lost much of their armour smoke.
     for (const u of this.world.units) {

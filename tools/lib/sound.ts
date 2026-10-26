@@ -27,6 +27,7 @@ export const RADIO = {
   underAttack: 'RADIO_UNDER_ATTACK',
   crippled: 'RADIO_CRIPPLED',
   refitDone: 'RADIO_REFIT_DONE',
+  refitIncomplete: 'RADIO_REFIT_INCOMPLETE',
   ejecting: 'RADIO_EJECTING',
   mechDead: 'RADIO_MECH_DEAD',
   vehicleDead: 'RADIO_VEHICLE_DEAD',
@@ -34,6 +35,8 @@ export const RADIO = {
   sensorContact: 'RADIO_SENSOR_CONTACT',
   underStrike: 'RADIO_UNDER_AIRSTRIKE',
   hittingMines: 'RADIO_HITTING_MINES',
+  /** A mech of the enemy's down but not blown apart: worth recovering (MC2 has the line but never plays it). */
+  mechSalvage: 'RADIO_MECH_SALVAGE',
 } as const;
 export type RadioMessage = keyof typeof RADIO;
 
@@ -61,6 +64,8 @@ export const BETTY = {
   towerDestroyed: 35,
   /** BETTY_MINES_GONE: a minelayer has laid its last mine. */
   minesGone: 52,
+  /** BETTY_REPAIR_COMPLETE: a repair truck has mended a mech, or a recovery team brought one back. */
+  repairComplete: 20,
 } as const;
 export type BettyLine = keyof typeof BETTY;
 
@@ -87,11 +92,24 @@ export const SUPPORT = {
   artillery: 'supp_artillery.wav',
   scout: 'supp_scout.wav',
   minelayer: 'supp_minelayer.wav',
+  repair: 'supp_repair.wav',
+  recover: 'supp_recover.wav',
 } as const;
 export type SupportLine = keyof typeof SUPPORT;
 
 /** The VTOL that brings a side's support in: its flight in and out, and setting the unit down (mclib/sounds.h). */
 const VTOL_BITES = { flight: 74, drop: 75 } as const;
+/**
+ * Repairs and recovery (mclib/sounds.h): a mech being mended (REPAIRBAY_FX, sound.snd's "mech repair": MC2 plays it for
+ * its repair bays, here for the truck too), the recovery team's Karnov coming in (SALVAGE_CRAFT), and its beam going on
+ * (RADAR_HUM: the code calls it the Karnov's deploy sound).
+ */
+const REPAIR_BITES = { repair: 101, salvage: 116, beam: 38 } as const;
+/**
+ * sound.snd's "Salvage craft sound Effect" (bite 116) names the line before its file in sound.rsp (a train crossing's
+ * bell): it gets its own file here, at its volume.
+ */
+const SALVAGE_FILE = 'sfx_salvagecraft.wav';
 
 /** Things that blow up, and the explosion each gets. */
 export type Blast = 'mech' | 'vehicle' | 'structure' | 'crit' | 'strike' | 'helicopter' | 'mine';
@@ -164,6 +182,8 @@ export interface SoundFile {
   /** The support desk's lines, and the VTOL that brings support in. */
   support?: Partial<Record<SupportLine, string>>;
   vtol?: Partial<Record<keyof typeof VTOL_BITES, Cue>>;
+  /** A repair truck at work, and the recovery team's Karnov. */
+  repair?: Partial<Record<keyof typeof REPAIR_BITES, Cue>>;
   /** The tunes shipped, by number (null when the converter had no ffmpeg to encode them); `mission` is each mission's. */
   music: { tracks: Record<string, string>; mission: Record<string, number>; calm: number; combat: number[]; won: number; lost: number } | null;
 }
@@ -296,6 +316,11 @@ export function soundSet(
     const cue = bite(n);
     if (cue) vtol[key] = cue;
   }
+  const repair: SoundFile['repair'] = {};
+  for (const [key, n] of Object.entries(REPAIR_BITES) as [keyof typeof REPAIR_BITES, number][]) {
+    const cue = key === 'salvage' ? (snd?.has(`SoundBite${n}`) ? { file: ship(SALVAGE_FILE), gain: snd.num(`SoundBite${n}`, 'volume', 1) } : null) : bite(n);
+    if (cue?.file) repair[key] = cue as Cue;
+  }
 
   // Tunes, encoded by the converter to AAC (the originals are MS ADPCM, which browsers don't all play).
   const tunes = new Map<string, string>();
@@ -308,7 +333,7 @@ export function soundSet(
     tracks[n] = out;
   }
   const music = { tracks, mission: { [mission.name]: mission.tune }, ...MUSIC, combat: [...MUSIC.combat] };
-  return { manifest: { radio, voices: voiceFiles, betty, effects, weapons, blasts, flight, support, vtol, music }, files, tunes };
+  return { manifest: { radio, voices: voiceFiles, betty, effects, weapons, blasts, flight, support, vtol, repair, music }, files, tunes };
 }
 
 /** A key's number from whichever section of the file has it (MC2's object files put these in different ones). */

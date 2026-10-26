@@ -2,7 +2,8 @@
 // the destination), attacks as one (when its target falls, the target's squadmates are next), and is reinforced at its
 // side's base. Its members can be mechs, vehicles or infantry, and its spacing suits them. A squad of soldiers may have
 // an APC to carry them (carriers.ts); on foot, they have it follow on behind. A side's support (an artillery piece, a
-// scout, a minelayer: deploy.ts) comes as a squad of one, by VTOL.
+// scout, a minelayer, a repair vehicle: deploy.ts) comes as a squad of one, by VTOL; the mechs its recovery team brings
+// back that have no squad of their own to go to make up its salvage squad (recovery.ts).
 import type { ScenarioSquad } from '../../assets';
 import type { Deploy } from './deploy';
 import type { SeaUnit, World } from './world';
@@ -19,7 +20,9 @@ export type SquadOrder =
   | { kind: 'hold' }
   | { kind: 'move'; x: number; z: number }
   | { kind: 'attack'; target: SeaUnit }
-  | { kind: 'retreat'; x: number; z: number };
+  | { kind: 'retreat'; x: number; z: number }
+  /** A repair vehicle's: mend another squad's mechs (repairs.ts). */
+  | { kind: 'repair'; squad: Squad };
 
 export class Squad {
   /** Its members, living and dead (the dead are dropped when their bodies are cleared away). */
@@ -44,6 +47,11 @@ export class Squad {
   support: Deploy | null = null;
   /** A VTOL is bringing it. */
   inbound = false;
+  /**
+   * Its side's salvage squad: the mechs its recovery team has brought back (recovery.ts). It's never reinforced and
+   * doesn't come back when it's wiped out; its members' types are its spec's units, as they join.
+   */
+  salvage = false;
 
   /** Its truck carries supply. */
   get isLogistics(): boolean {
@@ -69,6 +77,11 @@ export class Squad {
   /** Its minelayer, while it has one. */
   get minelayer(): SeaUnit | null {
     return this.units.find((u) => u.alive && u.mines !== null) ?? null;
+  }
+
+  /** Its repair vehicle, while it has one. */
+  get repairer(): SeaUnit | null {
+    return this.units.find((u) => u.alive && u.repairPoints !== null) ?? null;
   }
 
   /** Everyone left in it flies (helicopters: they can't take a point). */
@@ -155,7 +168,7 @@ export class Squad {
   status(now: number): string {
     if (this.respawnAt !== null) return `back in ${Math.max(0, Math.ceil(this.respawnAt - now))} s`;
     const alive = this.alive;
-    if (!alive.length) return this.inbound ? 'on its way by VTOL' : this.support ? 'not called in' : 'wiped out';
+    if (!alive.length) return this.inbound ? 'on its way by VTOL' : this.support ? 'not called in' : this.salvage ? 'none recovered' : 'wiped out';
     if (this.airborne) return alive.some((u) => u.embarked) ? 'airlifted' : 'awaiting the Karnov';
     if (this.ride) return this.ride === 'aboard' ? 'in the APC' : this.ride === 'boarding' ? 'boarding the APC' : 'waiting for the APC';
     if (this.isLogistics) {
@@ -166,6 +179,13 @@ export class Squad {
     const suppressed = this.suppression >= SUPPRESSED ? ', suppressed' : '';
     if (this.dugIn) return (alive.some((u) => u.target && u.target.alive) ? 'dug in, fighting' : 'dug in') + suppressed;
     if (alive.some((u) => u.target && u.combat && u.target.alive)) return 'fighting' + suppressed;
+    if (alive.some((u) => u.power === 'down')) return 'under repair';
+    if (alive.some((u) => u.power === 'starting')) return 'powering up';
+    const repairer = this.repairer;
+    if (repairer) {
+      const points = `${Math.floor(repairer.repairPoints ?? 0)} points`;
+      return `${this.task ?? (repairer.route.length ? 'moving' : 'holding')} · ${points}`;
+    }
     if (this.order.kind === 'retreat') return 'falling back';
     if (alive.some((u) => u.flight === 'takingOff')) return 'taking off';
     const layer = this.minelayer;

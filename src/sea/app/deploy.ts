@@ -1,9 +1,11 @@
 // Support units a side calls in, after MC2's support menu (code/controlgui.cpp, missiongui.cpp): its guard tower (in
 // truth an artillery piece: objects/guardtower.fit, a 40-tonne Long Tom that never moves), its scout (a light
-// helicopter, objects/scoutcopter.fit, that sees 20% further than most: LOSFactor 1.2) and its minelayer
-// (objects/minelayer.fit: mines.ts). As the engine does it, a VTOL (tgl/vtol, its drop-off animation) flies the unit
-// in to a spot the side can see, on dry, open ground, sets it down 145 frames in and flies off; the unit's crew are
-// MC2's support pilots (missions/warriors/pmwguardtower.fit and the others), and the support desk says what's coming.
+// helicopter, objects/scoutcopter.fit, that sees 20% further than most: LOSFactor 1.2), its minelayer
+// (objects/minelayer.fit: mines.ts) and its repair vehicle (objects/repairtruck.fit, the supply trucks' own, its refit
+// points for mending mechs in the field: repairs.ts). As the engine does it, a VTOL (tgl/vtol, its drop-off animation)
+// flies the unit in to a spot the side can see, on dry, open ground, sets it down 145 frames in and flies off; the
+// unit's crew are MC2's support pilots (missions/warriors/pmwguardtower.fit and the others), talking in MC2's voices for
+// them (sound/pilota..pilotd), and the support desk says what's coming. Its recovery team is recovery.ts.
 //
 // MC2 buys these with resource points. Here, as with strikes, a side has one of each at a time: the first is ready a
 // while into the match, and the next a while after the last is lost. Each comes as a squad of one, which the player
@@ -13,14 +15,17 @@ import type { Match, Side } from './match';
 import { Squad } from './squads';
 import { bearing, type SeaUnit, type World } from './world';
 
-export type Deploy = 'artilleryPiece' | 'scout' | 'minelayer';
-export const DEPLOYS: Deploy[] = ['artilleryPiece', 'scout', 'minelayer'];
-export const DEPLOY_NAMES: Record<Deploy, string> = { artilleryPiece: 'Artillery piece', scout: 'Scout', minelayer: 'Minelayer' };
+export type Deploy = 'artilleryPiece' | 'scout' | 'minelayer' | 'repairVehicle';
+export const DEPLOYS: Deploy[] = ['artilleryPiece', 'scout', 'minelayer', 'repairVehicle'];
+export const DEPLOY_NAMES: Record<Deploy, string> = { artilleryPiece: 'Artillery piece', scout: 'Scout', minelayer: 'Minelayer', repairVehicle: 'Repair vehicle' };
+/** What the repair vehicle is called (it's the supply trucks' own: MC2's repair truck). */
+const REPAIR_TRUCK = 'Repair truck';
 /** The squad each makes: its name, and its role on its card. */
 const SQUADS: Record<Deploy, { name: string; role: string }> = {
   artilleryPiece: { name: 'Long Tom', role: 'Artillery piece' },
   scout: { name: 'Pegasus', role: 'Scout copter' },
   minelayer: { name: 'Sapper', role: 'Minelayer' },
+  repairVehicle: { name: 'Wrench', role: 'Repair vehicle' },
 };
 /** The VTOL sets the unit down this far into its animation (code/missiongui.cpp: frame 145 at 30 a second), of 300. */
 const DROP_S = 145 / 30;
@@ -94,7 +99,7 @@ export class Deployments {
     if (slot.readyAt === Infinity) return `your ${name.toLowerCase()} is already out (${slot.squad.name})`;
     const wait = this.readyIn(team, kind);
     if (wait > 0) return `${name} is ready in ${Math.ceil(wait)} s`;
-    if (!this.spotted(team, x, z)) return `none of your squads can see there: the VTOL sets down only where they can`;
+    if (!this.world.teamSees(team, x, z)) return `none of your squads can see there: the VTOL sets down only where they can`;
     if (this.world.terrain.heightAt(x, z) < 0) return `the VTOL can't set the ${name.toLowerCase()} down in the water`;
     const [sx, sz] = this.world.openNear(x, z, 'ground');
     if (Math.hypot(sx - x, sz - z) > OPEN_M) return `the VTOL needs open ground to set the ${name.toLowerCase()} down on`;
@@ -150,15 +155,6 @@ export class Deployments {
     return this.slots.find((s) => s.team === team && s.kind === kind);
   }
 
-  /** One of the side's units sees the spot: it's within its sight, with no ground in between (MC2's teamLineOfSight). */
-  private spotted(team: number, x: number, z: number): boolean {
-    const terrain = this.world.terrain;
-    const y = Math.max(terrain.heightAt(x, z), 0) + 2;
-    return this.world.units.some(
-      (u) => u.team === team && u.alive && u.combat && !u.embarked && Math.hypot(u.x - x, u.z - z) <= u.sightRange && !terrain.blocked(u.x, u.eyeY, u.z, x, y, z),
-    );
-  }
-
   /** The VTOL comes in from the side's base (its animation flies in from behind it) and plays its drop-off. */
   private async fly(slot: Slot, drop: NonNullable<Slot['drop']>): Promise<void> {
     const path = this.spec.vtol ? this.world.propPath(this.spec.vtol) : null;
@@ -192,11 +188,17 @@ export class Deployments {
     const enemy = this.match.sides.find((s) => s !== side)!;
     const type = slot.spec.unit;
     const [x, z] = this.world.openNear(drop.x, drop.z, this.world.typeMoveClass(type));
-    const unit = await this.world.spawnType(type, slot.team, x, z, bearing(drop, enemy.base), slot.spec.gunnery, side.paint);
+    const name = slot.kind === 'repairVehicle' ? REPAIR_TRUCK : undefined;
+    const unit = await this.world.spawnType(type, slot.team, x, z, bearing(drop, enemy.base), slot.spec.gunnery, side.paint, name);
     slot.squad.inbound = false;
     if (!unit) {
       slot.readyAt = this.match.time + slot.spec.cooldown;
       return;
+    }
+    // A repair truck's refit points are for repairs here, not supply.
+    if (slot.kind === 'repairVehicle') {
+      [unit.repairPoints, unit.repairCapacity] = [unit.supply, unit.supplyCapacity];
+      unit.supply = unit.supplyCapacity = null;
     }
     unit.squad = slot.squad;
     slot.squad.units.push(unit);

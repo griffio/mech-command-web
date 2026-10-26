@@ -1,9 +1,10 @@
 // What the player hears and reads as a match goes. Their squads answer orders over the radio in their pilots' voices
 // (MC2's lines: acknowledged, can't do that, can't get there) and call out contacts, attacks, being pinned down, enemy
-// strikes coming in, mines, crippling damage, kills and finished refits. Betty announces points taken, forward bases
-// and the artillery piece (MC2's guard tower) under attack or lost, supply and mines run out, strikes ready, and the
-// result, over the win or lose tune; the support desk says what's on its way. Refused orders and alerts also show in
-// the middle of the screen, with MC2's buzz or alarm.
+// strikes coming in, mines, crippling damage, kills (a disabled mech worth recovering, when the recovery team is ready)
+// and finished refits and repairs. Betty announces points taken, forward bases and the artillery piece (MC2's guard
+// tower) under attack or lost, supply, mines and refit points run out, repairs and recoveries done, strikes ready, and
+// the result, over the win or lose tune; the support desk says what's on its way. Refused orders and alerts also show
+// in the middle of the screen, with MC2's buzz or alarm.
 //
 // MC2 says these lines when it does (code/tacordr.cpp, warrior.cpp, mech.cpp, mover.cpp); how often a squad repeats
 // itself is this project's own choice, so that a long fight isn't a running commentary.
@@ -38,7 +39,7 @@ const WHOLE = 0.99;
 const PINNED_QUIET_S = 20;
 const MINES_QUIET_S = 15;
 /** What the support desk says for each support unit on its way. */
-const SUPPORT_LINE: Record<Deploy, SupportLine> = { artilleryPiece: 'artillery', scout: 'scout', minelayer: 'minelayer' };
+const SUPPORT_LINE: Record<Deploy, SupportLine> = { artilleryPiece: 'artillery', scout: 'scout', minelayer: 'minelayer', repairVehicle: 'repair' };
 const POLL_S = 0.25;
 
 export class Callouts {
@@ -94,7 +95,7 @@ export class Callouts {
       this.refused(refused.map((q) => q.refused).join(' · '), done ? null : r.squad, r.order === 'move' ? 'moveBlocked' : 'illegalOrder');
     }
     if (!done) return;
-    if (done.order === 'move' || done.order === 'airlift' || done.order === 'build' || done.order === 'mines') this.sound?.effect('place');
+    if (done.order === 'move' || done.order === 'airlift' || done.order === 'build' || done.order === 'mines' || done.order === 'repair') this.sound?.effect('place');
     // MC2 answers an attack order either way, at even odds (tacordr.cpp).
     this.say(done.squad, done.order === 'attack' && Math.random() < 0.5 ? 'targetAck' : 'ack');
     const pinned = reports.filter((r) => !r.refused && r.order === 'move' && r.squad.pinned).map((r) => r.squad.name);
@@ -179,7 +180,9 @@ export class Callouts {
             ? `${s.squad.name} is down: select it and press Lay mines`
             : s.what === 'scout'
               ? `${s.squad.name} is down: send it ahead to see for the rest`
-              : `${s.squad.name} is down: its Long Tom shells what your side sees within 180 m`,
+              : s.what === 'repairVehicle'
+                ? `${s.squad.name} is down: select it, press Repair and tap a squad of your mechs`
+                : `${s.squad.name} is down: its Long Tom shells what your side sees within 180 m`,
         );
       case 'deployReady':
         if (own) this.notice.show(`${DEPLOY_NAMES[s.what]} ready`);
@@ -199,7 +202,51 @@ export class Callouts {
         this.lastMine.set(q, this.match.time);
         return this.say(q, 'hittingMines');
       }
+      case 'repaired':
+        if (!own) return;
+        // Its own word for it: not the base's refit report too.
+        this.damaged.delete(s.squad);
+        return this.say(s.squad, 'refitDone');
+      case 'repairsDone':
+        if (!own) return;
+        if (!s.mended) return this.notice.show(`${s.truck.name} has done what it can for ${s.squad.name}`);
+        this.notice.show(`${s.truck.name} has mended ${s.squad.name}${s.mended > 1 ? ` (${s.mended} mechs)` : ''}`);
+        return this.sound?.announce('repairComplete');
+      case 'repairGone':
+        if (!own) return;
+        this.notice.show(`${s.truck.name} is out of refit points: send it to base to load more`, 'alert');
+        this.say(s.squad, 'refitIncomplete');
+        return this.sound?.announce('supplyGone');
+      case 'recoveryCalled':
+        if (!own) return;
+        this.notice.show(`Recovery team on its way: its Karnov mends the ${s.unit.name} where it lies`);
+        this.sound?.effect('place');
+        return this.sound?.support('recover');
+      case 'recoveryReady':
+        if (own) this.notice.show('Recovery team ready');
+        return;
+      case 'recoveryFailed':
+        if (own) this.notice.show('The recovery team flew off: there was nothing left to recover', 'alert');
+        return;
+      case 'recovered':
+        return this.recovered(s);
     }
+  }
+
+  /** A mech recovered: the player's back in a squad, or one for the salvage squad; or the enemy's taking one of theirs. */
+  private recovered(s: Extract<MatchSignal, { kind: 'recovered' }>): void {
+    if (s.team !== PLAYER_TEAM) {
+      if (s.from === PLAYER_TEAM) this.notice.show(`The enemy has recovered your ${s.unit.name}: it fights for them now`, 'alert');
+      return;
+    }
+    const back = s.from === PLAYER_TEAM && !s.squad.salvage;
+    this.notice.show(
+      back
+        ? `${s.unit.name} recovered: it's back with ${s.squad.name}${s.tickets ? ` (+${s.tickets} tickets)` : ''}`
+        : `${s.unit.name} recovered: it fights for you now, in ${s.squad.name}${s.tickets ? ` (+${s.tickets} tickets)` : ''}`,
+    );
+    this.say(s.squad, 'refitDone');
+    this.sound?.announce('repairComplete');
   }
 
   /** The player's strike on its way; or the enemy's, coming down near the player's units. */
@@ -244,8 +291,10 @@ export class Callouts {
     const t = this.match.time;
     if (t - (this.lastKill.get(by.squad) ?? -Infinity) < KILL_QUIET_S) return;
     this.lastKill.set(by.squad, t);
-    // A helicopter isn't a mech kill (code/warrior.cpp).
-    this.say(by.squad, unit.kind === 'mech' && !unit.flies ? 'mechDead' : unit.kind === 'structure' ? 'buildingDead' : 'vehicleDead');
+    // A helicopter isn't a mech kill (code/warrior.cpp). A mech only disabled is worth recovering, once there's a
+    // recovery team to send.
+    const salvage = unit.salvage && this.match.recovery?.readyIn(PLAYER_TEAM) === 0;
+    this.say(by.squad, salvage ? 'mechSalvage' : unit.kind === 'mech' && !unit.flies ? 'mechDead' : unit.kind === 'structure' ? 'buildingDead' : 'vehicleDead');
   }
 
   /**

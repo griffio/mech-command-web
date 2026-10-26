@@ -105,7 +105,7 @@ export class MatchHud {
       tag.textContent = a && b ? 'contested' : a ? `${a} of yours` : b ? `${b} enemy` : '';
     });
     for (const [squad, card] of this.cards) {
-      const away = !!squad.support && !squad.alive.length && !squad.inbound;
+      const away = (!!squad.support || squad.salvage) && !squad.alive.length && !squad.inbound;
       if (card.el.hidden !== away) card.el.hidden = away;
       if (away) continue;
       card.el.classList.toggle('selected', this.world.selectedSquads.has(squad));

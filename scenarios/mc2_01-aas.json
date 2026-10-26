@@ -29,21 +29,34 @@
       "first": 180,
       "cooldown": 300,
       "gunnery": 40,
-      "voice": "pilot2"
+      "voice": "pilota"
     },
     "scout": {
       "unit": "scoutcopter",
       "first": 30,
       "cooldown": 150,
       "gunnery": 35,
-      "voice": "pilot4"
+      "voice": "pilotd"
     },
     "minelayer": {
       "unit": "minelayer",
       "first": 90,
       "cooldown": 240,
       "gunnery": 35,
-      "voice": "pilot6"
+      "voice": "pilotb"
+    },
+    "repairVehicle": {
+      "unit": "repairtruck",
+      "first": 120,
+      "cooldown": 270,
+      "gunnery": 35,
+      "voice": "pilotc"
+    },
+    "recovery": {
+      "first": 240,
+      "cooldown": 360,
+      "gunnery": 40,
+      "voice": "pilot8"
     }
   },
   "points": [

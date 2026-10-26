@@ -1,9 +1,9 @@
 // The battle's sounds: weapons firing, shots landing, units blowing up and mines going off, helicopters taking off and
-// landing, strikes coming in, and the VTOL bringing support, each with MC2's sound for it (tools/lib/sound.ts says which) as loud as MC2 plays it. A sound fades with
-// its distance from what the camera looks at, and with the camera's own distance (zoomed out, the fight is quieter),
-// and is panned to the side of the screen it's on. The player hears what their side can see: an unseen enemy's guns
-// are silent, though its shots landing on the player's units aren't. The player's squads fighting brings in the combat
-// music.
+// landing, strikes coming in, the VTOL bringing support, repair trucks at work and the recovery team's Karnov, each with
+// MC2's sound for it (tools/lib/sound.ts says which) as loud as MC2 plays it. A sound fades with its distance from what
+// the camera looks at, and with the camera's own distance (zoomed out, the fight is quieter), and is panned to the side
+// of the screen it's on. The player hears what their side can see: an unseen enemy's guns are silent, though its shots
+// landing on the player's units aren't. The player's squads fighting brings in the combat music.
 import type { Camera } from '../render/camera';
 import type { Battle, Noise } from './battle';
 import type { Music } from './music';
@@ -61,6 +61,7 @@ export class BattleSounds {
       cue = file.flight?.[n.up ? 'takeOff' : 'land'];
     } else if (n.kind === 'burst') cue = file.blasts?.strike;
     else if (n.kind === 'vtol') cue = file.vtol?.[n.drop ? 'drop' : 'flight'];
+    else if (n.kind === 'repair') cue = file.repair?.[n.what];
     else cue = file.effects.incoming ? { file: file.effects.incoming, gain: 1 } : undefined;
     if (!cue) return;
     const d = Math.hypot(n.at[0] - this.x, n.at[2] - this.z, this.height * HEIGHT_SHARE);

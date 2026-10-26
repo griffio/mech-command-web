@@ -341,6 +341,20 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     if (p.cancelled || p.handled || Math.hypot(e.clientX - p.x, e.clientY - p.y) > SLOP_PX) return;
     const hit = pickAt(e.clientX, e.clientY);
     if (!hit) return;
+    // With Recovery team pressed, the tap is on the wreck it's for; with Repair, on a squad of the player's mechs.
+    if (mode === 'recovery') {
+      const [x, z] = Array.isArray(hit) ? hit : [hit.x, hit.z];
+      const why = world.match?.recovery?.call(PLAYER_TEAM, world.salvageAt(x, z));
+      if (why) callouts?.refused(why, null);
+      return setMode(null);
+    }
+    if (mode === 'repair') {
+      const [x, z] = Array.isArray(hit) ? hit : [hit.x, hit.z];
+      const squad = !Array.isArray(hit) && hit.commandable ? hit.squad : ownMechNear(world, x, z)?.squad;
+      if (squad) world.orderRepair(squad);
+      else callouts?.refused('tap a squad of your mechs for the repair vehicle to mend', null);
+      return setMode(null);
+    }
     // With Artillery, Air strike or Sensor probe pressed, the tap (on the ground or a unit) is where it lands; with one
     // of the support buttons, where the VTOL sets that down.
     if (mode && ((CALL_INS as string[]).includes(mode) || (DEPLOYS as string[]).includes(mode))) {
@@ -367,6 +381,8 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
   const run = document.getElementById('cmd-run') as HTMLButtonElement;
   const airlift = document.getElementById('cmd-airlift') as HTMLButtonElement;
   const mines = document.getElementById('cmd-mines') as HTMLButtonElement;
+  const repair = document.getElementById('cmd-repair') as HTMLButtonElement;
+  const recovery = document.getElementById('cmd-recovery') as HTMLButtonElement;
   const buildButtons = new Map<BuildKind, HTMLButtonElement>([
     ['fob', document.getElementById('cmd-build') as HTMLButtonElement],
     ['turret', document.getElementById('cmd-turret') as HTMLButtonElement],
@@ -374,7 +390,7 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
   ]);
   // Airlift and the Build buttons are modes for the next tap on the ground (pressing one lets go of the other): while
   // one waits, the notice says what to tap, and for a build red rings show where it can't go.
-  let mode: 'airlift' | 'mines' | BuildKind | CallIn | Deploy | null = null;
+  let mode: 'airlift' | 'mines' | 'repair' | 'recovery' | BuildKind | CallIn | Deploy | null = null;
   const strikeButtons = new Map(CALL_INS.map((c) => [c, document.getElementById(`cmd-${c}`) as HTMLButtonElement]));
   const deployButtons = new Map(DEPLOYS.map((d) => [d, document.getElementById(`cmd-${d}`) as HTMLButtonElement]));
   const names = (pick: (q: Squad) => boolean) => [...world.selectedSquads].filter(pick).map((q) => q.name).join(' and ');
@@ -383,6 +399,8 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     mode = next;
     airlift.setAttribute('aria-pressed', String(mode === 'airlift'));
     mines.setAttribute('aria-pressed', String(mode === 'mines'));
+    repair.setAttribute('aria-pressed', String(mode === 'repair'));
+    recovery.setAttribute('aria-pressed', String(mode === 'recovery'));
     for (const [kind, button] of buildButtons) button.setAttribute('aria-pressed', String(mode === kind));
     for (const [call, button] of strikeButtons) button.setAttribute('aria-pressed', String(mode === call));
     for (const [kind, button] of deployButtons) button.setAttribute('aria-pressed', String(mode === kind));
@@ -403,6 +421,12 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
           ? `Tap where the VTOL should set the scout copter down, on open ground your squads can see: it flies, and sees further than the rest`
         : mode === 'minelayer'
           ? `Tap where the VTOL should set the minelayer down, on open ground your squads can see; then select it and press Lay mines`
+        : mode === 'repairVehicle'
+          ? `Tap where the VTOL should set the repair vehicle down, on open ground your squads can see; then select it and press Repair`
+        : mode === 'repair'
+          ? `Tap a squad of your mechs for ${names((q) => !!q.repairer)} to mend: each mech powers down while it's worked on (lost arms stay lost)`
+        : mode === 'recovery'
+          ? `Tap the wreck of a disabled mech your squads can see (yours or the enemy's, not burnt out): the Karnov mends it to fight for you`
         : building === 'fob'
           ? `Tap where ${trucks} should build a forward base, outside the red rings`
           : building === 'turret'
@@ -423,6 +447,20 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
   mines.addEventListener('click', () => {
     sound?.effect(mode === 'mines' ? 'off' : 'on');
     setMode(mode === 'mines' ? null : 'mines');
+  });
+  repair.addEventListener('click', () => {
+    sound?.effect(mode === 'repair' ? 'off' : 'on');
+    setMode(mode === 'repair' ? null : 'repair');
+  });
+  recovery.addEventListener('click', () => {
+    const team = world.match?.recovery;
+    if (!team) return;
+    if (mode !== 'recovery') {
+      const wait = team.readyIn(PLAYER_TEAM);
+      if (wait > 0) return callouts?.refused(`Recovery team is ready in ${Math.ceil(wait)} s`, null);
+    }
+    sound?.effect(mode === 'recovery' ? 'off' : 'on');
+    setMode(mode === 'recovery' ? null : 'recovery');
   });
   // The support buttons: a mode for the next tap, once it's ready.
   for (const [kind, button] of deployButtons) {
@@ -473,6 +511,17 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     const trucks = squads.some((q) => q.isLogistics && !q.airborne);
     for (const [kind, button] of buildButtons) offer(button, trucks && !!world.match?.logistics?.canBuild(PLAYER_TEAM, kind), kind);
     offer(mines, squads.some((q) => (q.minelayer?.mines ?? 0) >= 1 && !q.airborne), 'mines');
+    offer(repair, squads.some((q) => (q.repairer?.repairPoints ?? 0) >= 1 && !q.airborne), 'repair');
+    // The recovery team's button, while its Karnov isn't out, shows how long until it's ready.
+    const team = world.match?.recovery;
+    const wait = team ? team.readyIn(PLAYER_TEAM) : Infinity;
+    offer(recovery, !!team?.available && wait < Infinity, 'recovery');
+    if (team && wait < Infinity) {
+      const s = Math.ceil(wait);
+      const label = s > 0 ? `Recovery team ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : 'Recovery team';
+      if (recovery.textContent !== label) recovery.textContent = label;
+      recovery.classList.toggle('waiting', s > 0);
+    }
     // A support button, while none of that is out, shows how long until it's ready.
     const deployments = world.match?.deployments;
     for (const [kind, button] of deployButtons) {
@@ -656,6 +705,17 @@ function describeUnit(world: World, u: SeaUnit, supply = true): string {
   if (ammo) parts.push(ammo);
   if (u.target) parts.push(`${u.attackOrder ? 'attacking' : 'firing at'} ${u.target.name}, ${Math.round(Math.hypot(u.target.x - u.x, u.target.z - u.z))} m`);
   return parts.join(' · ');
+}
+
+/** The player's mech nearest a tap on the ground, within a few metres of its footprint. */
+function ownMechNear(world: World, x: number, z: number): SeaUnit | null {
+  let best: SeaUnit | null = null;
+  let bestD = 12;
+  for (const u of world.units) {
+    const d = Math.hypot(u.x - x, u.z - z) - u.radius;
+    if (u.commandable && u.kind === 'mech' && !u.hidden && d < bestD) [best, bestD] = [u, d];
+  }
+  return best;
 }
 
 function percent(u: SeaUnit): string {

@@ -181,17 +181,29 @@ const LOCATION_NAME: Record<ArmorLocation, string> = {
 };
 /** Wounds that kill a pilot (code/warrior.cpp). */
 const DEADLY_WOUNDS = 6;
+const BODY_LOCATIONS: MechLocation[] = ['HD', 'CT', 'LT', 'RT', 'LA', 'RA', 'LL', 'RL'];
+const ARMOR_LOCATIONS: ArmorLocation[] = [...BODY_LOCATIONS, 'RCT', 'RLT', 'RRT'];
 
 export class MechCombat extends Combatant {
   readonly armor: Record<ArmorLocation, number>;
   readonly structure: Record<MechLocation, number>;
   wounds = 0;
+  /**
+   * Its centre torso gave way to the hit that first broke into it: MC2 blows such a mech apart (code/mech.cpp,
+   * destroyBodyLocation: it explodes within the moment of centerTorsoBlowTime), where one whose centre torso is worn
+   * through, or that falls to anything else, is only disabled, and can be recovered (recovery.ts).
+   */
+  blownApart = false;
+  private hits = 0;
+  /** The hit that first broke into its centre torso's structure (-1 until one has). */
+  private centreBrokenBy = -1;
   private readonly components: Record<MechLocation, (SlotContent & { hit: boolean })[]>;
   private readonly maxTotal: number;
 
   constructor(
     readonly stats: MechStats,
     weapons: Record<string, WeaponDef>,
+    /** An ammunition's damage a round, and its rounds a pack (a ton: compbas.csv). */
     private readonly explosive: (ammo: number) => { perRound: number; perPack: number },
     gunnery: number,
   ) {
@@ -225,6 +237,74 @@ export class MechCombat extends Combatant {
     return this.stats.sensorRange;
   }
 
+  /**
+   * It has armour, structure or ammunition to make up, but for arms it has lost (Mover::needsRefit, code/mover.cpp).
+   */
+  get needsRefit(): boolean {
+    if (!this.alive) return false;
+    if (ARMOR_LOCATIONS.some((l) => !this.armGone(l) && this.armor[l] < this.stats.armor[l])) return true;
+    if (BODY_LOCATIONS.some((l) => !this.armGone(l) && this.structure[l] < this.stats.structure[l])) return true;
+    return Object.entries(this.stats.ammo).some(([id, full]) => (this.ammo.get(Number(id)) ?? 0) < full);
+  }
+
+  /**
+   * One cycle of a repair truck's work (Mover::refit, code/mover.cpp): of the cycle's `points`, a third goes to armour
+   * and structure, shared evenly among the locations short of either (a point of armour or structure for a point:
+   * gamesys RefitVehicleArmorCost, RefitVehicleInternalCost), and a third to ammunition, shared among the kinds short
+   * (a ton for a point: RefitVehiclePointsToAmmo). Arms it has lost aren't mended, nor components a critical hit has
+   * taken out. Returns the points used, at most `available`.
+   */
+  fieldRefit(available: number, points: number): number {
+    if (!this.alive) return 0;
+    const share = points / 3;
+    let left = available;
+    const armour = ARMOR_LOCATIONS.filter((l) => !this.armGone(l) && this.armor[l] < this.stats.armor[l]);
+    const structure = BODY_LOCATIONS.filter((l) => !this.armGone(l) && this.structure[l] < this.stats.structure[l]);
+    const repairs = armour.length + structure.length;
+    for (const l of armour) {
+      const used = Math.min(share / repairs, left, this.stats.armor[l] - this.armor[l]);
+      this.armor[l] += used;
+      left -= used;
+    }
+    for (const l of structure) {
+      const used = Math.min(share / repairs, left, this.stats.structure[l] - this.structure[l]);
+      this.structure[l] += used;
+      left -= used;
+    }
+    const short = Object.entries(this.stats.ammo).filter(([id, full]) => (this.ammo.get(Number(id)) ?? 0) < full);
+    for (const [key, full] of short) {
+      const id = Number(key);
+      const perTon = Math.max(this.explosive(id).perPack, 1);
+      const have = this.ammo.get(id) ?? 0;
+      const used = Math.min(share / short.length, left, (full - have) / perTon);
+      this.ammo.set(id, Math.min(full, have + used * perTon));
+      left -= used;
+    }
+    return available - left;
+  }
+
+  /**
+   * Made whole from a disabled mech's wreck by a recovery team (Mover::recover, code/mover.cpp): its structure mended
+   * but for arms it lost, every component working again (those arms' aside), its armour and ammunition as they were,
+   * and a new pilot.
+   */
+  recoverFrom(wreck: MechCombat): void {
+    for (const l of ARMOR_LOCATIONS) this.armor[l] = wreck.armor[l];
+    for (const [id, rounds] of wreck.ammo) this.ammo.set(id, rounds);
+    for (const l of ['LA', 'RA'] as const) {
+      if (wreck.structure[l] > 0) continue;
+      this.structure[l] = 0;
+      this.armor[l] = 0;
+      for (const c of this.components[l]) c.hit = true;
+      for (const w of this.weapons) if (w.location === l) w.destroyed = true;
+    }
+  }
+
+  /** An arm (or its armour) the mech has lost: MC2 mends neither. */
+  private armGone(l: ArmorLocation): boolean {
+    return (l === 'LA' || l === 'RA') && this.structure[l] <= 0;
+  }
+
   /** The location's armour and structure as a share of new (a destroyed location is 0). */
   locationIntegrity(l: MechLocation): number {
     const rear = REAR_ARMOR[l];
@@ -256,6 +336,7 @@ export class MechCombat extends Combatant {
 
   takeHit(location: string, damage: number, rng: Rng): HitReport {
     const report: HitReport = { location: LOCATION_NAME[location as ArmorLocation], destroyed: [], criticals: [], exploded: false };
+    this.hits++;
     if (ARMOR_BODY[location as ArmorLocation] === 'HD' && damage >= 2) this.wound(1);
     this.damage(location as ArmorLocation, damage, rng, report);
     return report;
@@ -275,6 +356,7 @@ export class MechCombat extends Combatant {
       this.armor[location] = 0;
     }
     if (this.structure[body] > 0) {
+      if (body === 'CT' && this.centreBrokenBy < 0) this.centreBrokenBy = this.hits;
       if (left < this.structure[body]) {
         this.structure[body] -= left;
         this.critical(body, rng, report);
@@ -329,6 +411,7 @@ export class MechCombat extends Combatant {
     report.criticals.push('ammunition');
     this.wound(2);
     const blast = rounds * perRound;
+    if (body === 'CT' && this.centreBrokenBy < 0) this.centreBrokenBy = this.hits;
     if (blast >= this.structure[body]) this.destroy(body, report);
     else this.structure[body] -= blast;
   }
@@ -343,7 +426,10 @@ export class MechCombat extends Combatant {
     // A side torso takes its arm with it.
     if (body === 'LT' && this.structure.LA > 0) this.destroy('LA', report);
     if (body === 'RT' && this.structure.RA > 0) this.destroy('RA', report);
-    if (body === 'CT') this.kill('centre torso destroyed');
+    if (body === 'CT') {
+      if (this.alive && this.centreBrokenBy === this.hits) this.blownApart = true;
+      this.kill('centre torso destroyed');
+    }
     if (body === 'HD') this.kill('head destroyed');
     if (this.structure.LL <= 0 && this.structure.RL <= 0) this.kill('legs destroyed');
   }

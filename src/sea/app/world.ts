@@ -133,6 +133,23 @@ export class SeaUnit {
   mines: number | null = null;
   minesCapacity: number | null = null;
   laying = false;
+  /** A repair vehicle's refit points (repairs.ts), and how many it holds (null for anything else). */
+  repairPoints: number | null = null;
+  repairCapacity: number | null = null;
+  /**
+   * Powered down (MC2's shutdown, a mech's park gestures): a mech a repair truck is working on. It neither moves nor
+   * fires until it has powered up again ('starting': standing up, or getting up after a recovery).
+   */
+  power: 'on' | 'down' | 'starting' = 'on';
+  /**
+   * A mech knocked out but not blown apart (MC2's disabled): its wreck lies with its paint on, and a recovery team can
+   * bring it back (recovery.ts) until it's cleared away, or a blast finishes it off.
+   */
+  salvage = false;
+  /** Damage a disabled mech's wreck has taken since (MC2's damageAfterDisabled). */
+  scrapDamage = 0;
+  /** It fell on its back when it went down (it gets up the same way). */
+  fellBackward = false;
   /** How suppressed it is by fire landing about it, 0..1 (suppression.ts), and when it last was (game time). */
   suppression = 0;
   suppressedAt = -Infinity;
@@ -229,9 +246,9 @@ export class SeaUnit {
     return SIGHT_RANGE * (this.combat?.stats.losFactor ?? 1);
   }
 
-  /** A helicopter on the ground, or on its way up or down: it neither moves nor fires. */
+  /** A helicopter on the ground, or on its way up or down, or a mech powered down: it neither moves nor fires. */
   get grounded(): boolean {
-    return this.flight !== 'flying' && this.flies;
+    return (this.flight !== 'flying' && this.flies) || this.power !== 'on';
   }
 
   /** Where its weapons point: the torso's facing on a mech, the turret's on a vehicle (MC2 degrees). */
@@ -280,11 +297,30 @@ export class SeaUnit {
     return this.size * 0.55;
   }
 
-  /** Play a clip, looping unless `once` (then it holds its last frame: see clipDone). */
-  play(name: string, fade = 0.2, once = false): void {
-    // A helicopter on the ground, or on its way up or down, plays that.
+  /** Play a clip, looping unless `once` (then it holds its last frame: see clipDone), backwards if `reverse`. */
+  play(name: string, fade = 0.2, once = false, reverse = false): void {
+    // A helicopter on the ground, or on its way up or down, plays that; so does a mech powered down.
     if (this.grounded) return;
-    this.animator?.play(name, fade, 0, !once);
+    this.animator?.play(name, fade, 0, !once, reverse);
+  }
+
+  /** Power down where it stands (MC2's shutdown: its stand-to-park gesture), for a repair truck to work on it. */
+  powerDown(): void {
+    if (this.power === 'down' || !this.alive) return;
+    this.route = [];
+    this.engaging = false;
+    this.target = null;
+    this.power = 'down';
+    this.animator?.play('standToPark', 0.3, 0, false);
+  }
+
+  /** Power up again: its park-to-stand gesture, or another (getting up), after which it's back to work. */
+  powerUp(clip = 'parkToStand'): void {
+    if (!this.alive) return;
+    const has = this.clips.includes(clip);
+    this.power = has ? 'starting' : 'on';
+    if (has) this.animator?.play(clip, 0.3, 0, false);
+    else this.animator?.play('idle', 0.3);
   }
 
   /** Set a helicopter down where it is, unless it's going somewhere (it takes off again when it is). */
@@ -328,9 +364,11 @@ export class SeaUnit {
     this.target = null;
     this.attackOrder = null;
     this.engaging = false;
+    this.power = 'on';
+    this.fellBackward = fromFront;
     if (this.kind === 'infantry') this.gone = true;
     // A helicopter on the ground (or on its way up or down) is wrecked where it stands; one in the air falls out of it.
-    else if (this.grounded) this.animator?.play('standToPark', 0.3, Infinity, false);
+    else if (this.flies && this.flight !== 'flying') this.animator?.play('standToPark', 0.3, Infinity, false);
     // The models' destroyed gestures carry no keys; the falls they match frame for frame do.
     else this.animator?.play(fromFront ? 'fallBackward' : 'fallForward', 0.15, 0, false);
   }
@@ -356,6 +394,10 @@ export class SeaUnit {
   update(dt: number, terrain: Terrain, move = true): void {
     if (move && this.alive && !this.embarked) {
       if (this.flies) this.lift();
+      else if (this.power === 'starting' && this.clipDone) {
+        this.power = 'on';
+        this.animator?.play('idle', 0.3);
+      }
       // Pinned soldiers stay down, and go on where they were going once the fire slackens. A helicopter on the ground
       // (or on its way up or down) waits.
       if (!this.grounded) {
@@ -447,7 +489,7 @@ export class SeaUnit {
 /** An order the player gave one of their squads, and whether it was carried out (if not, why not). */
 export interface OrderReport {
   squad: Squad;
-  order: 'move' | 'airlift' | 'attack' | 'stop' | 'build' | 'mines';
+  order: 'move' | 'airlift' | 'attack' | 'stop' | 'build' | 'mines' | 'repair';
   refused: string | null;
 }
 
@@ -654,15 +696,18 @@ export class World {
     return unit;
   }
 
-  /** A scenario unit type at a point (the caller adds it to `units`), or null if the converter didn't export it. */
-  async spawnType(type: string, team: number, x: number, z: number, rotation: number, gunnery: number, paint: PaintScheme): Promise<SeaUnit | null> {
+  /**
+   * A scenario unit type at a point (the caller adds it to `units`), or null if the converter didn't export it. `name`
+   * calls it something other than its type's name.
+   */
+  async spawnType(type: string, team: number, x: number, z: number, rotation: number, gunnery: number, paint: PaintScheme, name?: string): Promise<SeaUnit | null> {
     const t = this.unitsFile.types?.[type];
     if (!t) return null;
     const unit = await this.spawn({
       model: t.model,
       info: t.kind === 'mech' ? (this.unitsFile.mechs[type] ?? null) : null,
       kind: t.kind,
-      name: TYPE_NAMES[type] ?? t.name.charAt(0).toUpperCase() + t.name.slice(1),
+      name: name ?? TYPE_NAMES[type] ?? t.name.charAt(0).toUpperCase() + t.name.slice(1),
       team,
       x,
       z,
@@ -693,6 +738,25 @@ export class World {
 
   typeKind(type: string): UnitKind {
     return this.unitsFile.types?.[type]?.kind ?? 'vehicle';
+  }
+
+  /** One of a side's units sees a spot: it's within its sight, with no ground in between (MC2's teamLineOfSight). */
+  teamSees(team: number, x: number, z: number): boolean {
+    const y = Math.max(this.terrain.heightAt(x, z), 0) + 2;
+    return this.units.some(
+      (u) => u.team === team && u.alive && u.combat && !u.embarked && Math.hypot(u.x - x, u.z - z) <= u.sightRange && !this.terrain.blocked(u.x, u.eyeY, u.z, x, y, z),
+    );
+  }
+
+  /** The disabled mech's wreck nearest a spot, within `slop` metres of its footprint (null if none is). */
+  salvageAt(x: number, z: number, slop = 10): SeaUnit | null {
+    let best: SeaUnit | null = null;
+    let bestD = Infinity;
+    for (const u of this.units) {
+      const d = Math.hypot(u.x - x, u.z - z) - u.radius;
+      if (u.salvage && !u.alive && d <= slop && d < bestD) [best, bestD] = [u, d];
+    }
+    return best;
   }
 
   /**
@@ -1014,6 +1078,13 @@ export class World {
   /** Airlift the selected infantry squads to a point (the rest of the selection goes there on its own feet). */
   orderAirlift(x: number, z: number): number {
     return this.orderSquadsMove(x, z, true);
+  }
+
+  /** Send the selected squads' repair vehicles to mend a squad's mechs (repairs.ts). */
+  orderRepair(target: Squad): void {
+    const squads = [...this.selectedSquads].filter((q) => q.repairer);
+    if (!squads.length || !this.match) return this.onRefused('select a repair vehicle first');
+    this.onOrders(squads.map((q) => ({ squad: q, order: 'repair', refused: this.match!.repairs.order(q, target) })));
   }
 
   /** Send the selected squads' minelayers to a point, laying mines on their way. */

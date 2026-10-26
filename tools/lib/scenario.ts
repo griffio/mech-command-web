@@ -87,6 +87,24 @@ export interface ScenarioSupport {
   scout?: ScenarioDeploy;
   /** MC2's minelayer: it lays mines where it's sent to. */
   minelayer?: ScenarioDeploy;
+  /** MC2's repair vehicle: a repair truck that mends the side's mechs in the field. */
+  repairVehicle?: ScenarioDeploy;
+  /** MC2's recovery team: the transport (the Karnov) brings a disabled mech back to fight for the side. */
+  recovery?: ScenarioRecovery;
+}
+
+/**
+ * A side's recovery team: called on a disabled mech it can see, its Karnov mends it for the side. A side has one at a
+ * time: the next is ready a while after the last has flown off.
+ */
+export interface ScenarioRecovery {
+  /** Seconds into the match before the first, and after one has flown off before the next. */
+  first: number;
+  cooldown: number;
+  /** The gunnery of the new pilots it brings for the side's salvage squad (the chance to hit, percent). */
+  gunnery: number;
+  /** Whose voice the salvage squad talks in over the radio (sound/pilots/pilot1..pilot26). */
+  voice?: string;
 }
 
 /**
@@ -101,7 +119,10 @@ export interface ScenarioDeploy {
   cooldown: number;
   /** Its crew's gunnery: the chance to hit, percent. */
   gunnery: number;
-  /** Whose voice it talks in over the radio (sound/pilots/pilot1..pilot26). */
+  /**
+   * Whose voice it talks in over the radio (sound/pilots/pilot1..pilot26, or MC2's support crews': pilota the artillery
+   * piece's, pilotb the minelayer's, pilotc the repair truck's, pilotd the scout copter's).
+   */
   voice?: string;
 }
 
@@ -154,11 +175,12 @@ export function scenarioNeeds(scenarios: Scenario[]): {
         if (call.bomber) appearances.add(call.bomber.toLowerCase());
       }
       if (s.support.vtol) appearances.add(s.support.vtol.toLowerCase());
-      for (const d of [s.support.artilleryPiece, s.support.scout, s.support.minelayer]) {
+      for (const d of [s.support.artilleryPiece, s.support.scout, s.support.minelayer, s.support.repairVehicle]) {
         if (!d) continue;
         units.add(d.unit.toLowerCase());
         if (d.voice) voices.add(d.voice.toLowerCase());
       }
+      if (s.support.recovery?.voice) voices.add(s.support.recovery.voice.toLowerCase());
     }
     if (s.garrison) props.add(s.garrison.toLowerCase());
     if (s.logistics) {

@@ -116,6 +116,16 @@ export class CombatEffects {
     this.smoke(at, 2 * intensity, 9 * intensity, 4, 0.4, [0.13, 0.12, 0.11]);
   }
 
+  /**
+   * The recovery team's beam (MC2's KARNOV_RECOVERY_BEAM), from the Karnov down onto the wreck: a broad, soft
+   * blue-green light that holds a little longer than a laser (add it again a few times a second while it's on).
+   */
+  recoveryBeam(from: V3, to: V3): void {
+    const color: V3 = [0.35, 0.95, 0.75];
+    this.beams.add({ from, to, width: 2.6, color, brightness: 1.6, life: 0.4, core: 3 });
+    this.glow(to, 4, 2.5, 0.4, color, 2.5);
+  }
+
   /** Smoke from a badly damaged unit (call a few times a second); `amount` 1 is heavy. */
   damaged(at: V3, amount = 1): void {
     this.smoke(at, 0.8 * amount, 5 * amount, 2.5, 0.3, [0.2, 0.19, 0.18]);

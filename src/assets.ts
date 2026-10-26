@@ -105,6 +105,7 @@ export type {
   ScenarioPoint,
   ScenarioSide,
   ScenarioDeploy,
+  ScenarioRecovery,
   ScenarioSquad,
   ScenarioStrike,
   ScenarioSupport,

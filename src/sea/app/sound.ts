@@ -131,6 +131,7 @@ export class Sound {
       ...Object.values(f.flight ?? {}).map((c) => c.file),
       ...Object.values(f.support ?? {}),
       ...Object.values(f.vtol ?? {}).map((c) => c.file),
+      ...Object.values(f.repair ?? {}).map((c) => c.file),
     ].filter((p): p is string => !!p);
     for (const path of new Set(all)) await this.buffer(path);
   }

@@ -12,7 +12,8 @@
 // behind sandbags, and are much harder to hit. Fire pins soldiers down (suppression.ts): pinned, they don't count
 // toward taking a point. Supply trucks build forward bases where squads come back, reinforce and
 // refit nearer the front (logistics.ts). Sensors pick up the enemy beyond sight (sensors.ts). A side calls in strikes
-// (support.ts), and support units by VTOL: an artillery piece, a scout, a minelayer (deploy.ts, mines.ts).
+// (support.ts), support units by VTOL: an artillery piece, a scout, a minelayer, a repair vehicle (deploy.ts, mines.ts,
+// repairs.ts), and its recovery team, which brings disabled mechs back to fight for it (recovery.ts).
 import type { Scenario, ScenarioSide } from '../../assets';
 import { PLAYER_PAINT, paintFromMission, type PaintScheme } from '../../paint.ts';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
@@ -23,6 +24,8 @@ import { Carriers } from './carriers';
 import { DEPLOYS, Deployments, type Deploy } from './deploy';
 import { FOB_RADIUS, Logistics, type ServicePoint } from './logistics';
 import { Minefields } from './mines';
+import { Recovery } from './recovery';
+import { Repairs, type RepairSignal } from './repairs';
 import { Sensors } from './sensors';
 import { Squad } from './squads';
 import { CALL_INS, Support, type CallIn } from './support';
@@ -74,6 +77,21 @@ const STRIKE_WORTH: Record<Exclude<CallIn, 'sensor'>, number> = { artillery: 4, 
  */
 const ARTILLERY_BACK_M = 110;
 const SCOUT_STANDOFF_M = 160;
+/**
+ * Its repair vehicle comes down, and waits, this far behind the point it holds at the front (at most this share of the
+ * way back to its base), metres: its squads are seldom out of the fight while they're hurt, and a truck at the front is
+ * soon shot up. It mends a squad that has lost at least this much (a share of one mech's armour and structure, over the
+ * squad's mechs) that isn't fighting or falling back and has no enemy in sight within the second distance (beyond the
+ * longest weapon's reach), calls the work off when that changes, and goes home to load below the points. It recovers a
+ * mech only with no enemy it knows of within the last distance (one getting up is a sitting target, and costs tickets
+ * again if it falls).
+ */
+const REPAIR_BACK_M = 300;
+const REPAIR_BACK_SHARE = 0.6;
+const REPAIR_NEED = 0.3;
+const REPAIR_CLEAR_M = 200;
+const MIN_REPAIR_POINTS = 60;
+const RECOVER_CLEAR_M = 200;
 const MINE_LINES = 3;
 const MINE_LINE_GAP_M = 25;
 const MINE_LINE_HALF_M = 55;
@@ -129,7 +147,13 @@ export type MatchSignal =
   | { kind: 'deployed'; team: number; what: Deploy; squad: Squad }
   /** A side's minelayer has laid its last mine; a side's unit has set off a mine. */
   | { kind: 'minesGone'; team: number; squad: Squad }
-  | { kind: 'mineHit'; team: number; unit: SeaUnit };
+  | { kind: 'mineHit'; team: number; unit: SeaUnit }
+  /** A side's repair vehicle at work (repairs.ts). */
+  | RepairSignal
+  /** A side's recovery team: sent for a wreck, ready to be, flown off without mending it, or mending it. */
+  | { kind: 'recoveryCalled'; team: number; unit: SeaUnit }
+  | { kind: 'recoveryReady' | 'recoveryFailed'; team: number }
+  | { kind: 'recovered'; team: number; unit: SeaUnit; squad: Squad; from: number; tickets: number };
 
 export interface Side {
   team: number;
@@ -165,6 +189,10 @@ export class Match {
   readonly deployments: Deployments | null = null;
   /** The mines the sides' minelayers have laid. */
   readonly mines: Minefields;
+  /** The sides' repair vehicles' work. */
+  readonly repairs: Repairs;
+  /** The sides' recovery teams, when the scenario has them. */
+  readonly recovery: Recovery | null = null;
   /** The sandbags dug-in squads shelter behind (null if the converter didn't export them). */
   private garrisonModel: GpuModel | null = null;
   private readonly sandbags = new Map<Squad, ModelInstance>();
@@ -185,6 +213,7 @@ export class Match {
     this.carriers.onEvent = (text, team) => this.onEvent(text, team);
     this.sensors = new Sensors(world, this);
     this.mines = new Minefields(world, this);
+    this.repairs = new Repairs(world, this);
     this.sides = scenario.sides.map((s) => ({
       team: s.team,
       name: s.name,
@@ -197,6 +226,10 @@ export class Match {
     if (scenario.support) {
       this.deployments = new Deployments(world, this, scenario.support);
       for (const side of this.sides) this.deployments.addSquads(side);
+    }
+    if (scenario.support?.recovery) {
+      this.recovery = new Recovery(world, this, scenario.support.recovery, scenario.transport ? world.propPath(scenario.transport) : null);
+      for (const side of this.sides) this.recovery.addSquads(side);
     }
     const n = scenario.points.length;
     this.points = scenario.points.map((p, i) => ({
@@ -233,8 +266,8 @@ export class Match {
     for (const side of match.sides) {
       const ring = await world.markerRing(RING_COLOR[String(side.team)]!, side.base.x, side.base.z, BASE_RADIUS);
       world.addMarker(ring, side.base.x, side.base.z, 1);
-      // Support units come later, by VTOL.
-      await Promise.all(side.squads.map((squad, i) => (squad.support ? null : match.deploy(side, squad, i))));
+      // Support units come later, by VTOL; recovered mechs later still.
+      await Promise.all(side.squads.map((squad, i) => (squad.support || squad.salvage ? null : match.deploy(side, squad, i))));
     }
     world.battle.onDestroyed = (u, by) => match.lost(u, by);
     world.battle.judgeOutcome = false;
@@ -285,6 +318,8 @@ export class Match {
     this.support?.update(dt);
     this.deployments?.update();
     this.mines.update(dt);
+    this.repairs.update(dt);
+    this.recovery?.update(dt);
     this.sensors.update(dt);
     this.capture(dt);
     this.garrison(dt);
@@ -293,6 +328,25 @@ export class Match {
     this.fog();
     for (const ai of this.commanders.values()) ai.update();
     this.judge();
+  }
+
+  /** What losing a unit costs its side in tickets (a recovered mech of its own gives them back). */
+  ticketCost(u: SeaUnit): number {
+    return ticketCost(u);
+  }
+
+  /** Take a wreck off the map now (a recovered mech's: the mech that stands up in its place is a new unit). */
+  forget(u: SeaUnit): void {
+    if (!this.world.units.includes(u)) return;
+    this.dead.delete(u);
+    const squad = u.squad;
+    if (squad) {
+      squad.units.splice(squad.units.indexOf(u), 1);
+      // A salvage squad's types are its members'.
+      const k = squad.salvage && u.typeKey ? squad.spec.units.indexOf(u.typeKey) : -1;
+      if (k >= 0) squad.spec.units.splice(k, 1);
+    }
+    this.world.remove(u);
   }
 
   /** A unit died: its side pays for it in tickets. */
@@ -401,14 +455,15 @@ export class Match {
 
   /**
    * Wiped-out squads come back after a while, at the forward base nearest the front that can pay for them (else the
-   * main base); a support unit doesn't (another can be called in: deploy.ts). Squads at a base get their missing
-   * members back and refit: free at the main base, for supply at a forward one. A minelayer loads mines as it refits.
+   * main base); a support unit doesn't (another can be called in: deploy.ts), nor does the salvage squad, which isn't
+   * reinforced either. Squads at a base get their missing members back and refit: free at the main base, for supply at
+   * a forward one. A minelayer loads mines as it refits, and a repair vehicle its refit points.
    */
   private supply(dt: number): void {
     for (const side of this.sides) {
       side.squads.forEach((squad, i) => {
         const alive = squad.alive;
-        if (squad.support && !alive.length) return;
+        if ((squad.support || squad.salvage) && !alive.length) return;
         // Wiped out: its APC, if that's left, goes back to the base to meet it.
         if (!squad.riders.length && this.spawning === 0) {
           if (squad.respawnAt === null) {
@@ -428,7 +483,7 @@ export class Match {
         for (const u of alive) if (!u.target && !u.attackOrder) u.land();
         if (!point.fob || this.logistics!.pay(point, this.logistics!.refitCost(alive) * dt)) for (const u of alive) refit(u, dt);
         else this.logistics!.short(point.fob, squad, 'refit');
-        if (squad.missing > 0 && this.time >= squad.reinforceAt && this.spawning === 0) {
+        if (squad.missing > 0 && !squad.salvage && this.time >= squad.reinforceAt && this.spawning === 0) {
           const next = this.missingTypes(squad)[0]!;
           if (!this.logistics || this.logistics.pay(point, this.logistics.costOf(next))) {
             squad.reinforceAt = this.time + REINFORCE_S;
@@ -480,7 +535,7 @@ export class Match {
     const facing = bearing(at, toward);
     // Squads stand side by side across the main base, facing the lane; at a forward base, about its tent.
     const across = ((facing + 90) * Math.PI) / 180;
-    const squads = side.squads.filter((q) => !q.support).length;
+    const squads = side.squads.filter((q) => !q.support && !q.salvage).length;
     const offset = at.fob ? (index % 3 - 1) * 20 : (index - (squads - 1) / 2) * 34;
     const back = at.fob ? FOB_RADIUS * 0.5 : 0;
     const cx = at.x + Math.sin(across) * offset - Math.sin((facing * Math.PI) / 180) * back;
@@ -507,13 +562,11 @@ export class Match {
     }
   }
 
-  /** Clear away bodies and old wrecks (and drop them from their squads). */
+  /** Clear away bodies and old wrecks (and drop them from their squads), but a wreck a Karnov has come to recover. */
   private clearDead(): void {
     for (const [u, at] of this.dead) {
-      if (this.time - at < (u.kind === 'infantry' ? CLEAR_INFANTRY_S : CLEAR_WRECK_S)) continue;
-      this.dead.delete(u);
-      if (u.squad) u.squad.units.splice(u.squad.units.indexOf(u), 1);
-      this.world.remove(u);
+      if (this.time - at < (u.kind === 'infantry' ? CLEAR_INFANTRY_S : CLEAR_WRECK_S) || this.recovery?.recovering(u)) continue;
+      this.forget(u);
     }
   }
 
@@ -551,10 +604,11 @@ export class Match {
   }
 }
 
-/** A unit at a base refits; a minelayer loads mines too. */
+/** A unit at a base refits; a minelayer loads mines too, and a repair vehicle refit points. */
 function refit(u: SeaUnit, dt: number): void {
   u.combat?.refit(dt, REFIT_RATE);
   if (u.mines !== null && u.minesCapacity) u.mines = Math.min(u.minesCapacity, u.mines + u.minesCapacity * REFIT_RATE * dt);
+  if (u.repairPoints !== null && u.repairCapacity) u.repairPoints = Math.min(u.repairCapacity, u.repairPoints + u.repairCapacity * REFIT_RATE * dt);
 }
 
 /** Somewhere to keep this far from. */
@@ -621,16 +675,18 @@ export class CommanderAI {
     this.callStrikes();
     this.probe();
     this.callSupport(ready);
+    this.recover();
     for (const q of ready.filter((q) => q.support === 'scout')) this.scout(q, target ?? hold);
     for (const q of ready.filter((q) => q.support === 'minelayer')) this.mine(q, hold);
+    for (const q of ready.filter((q) => q.support === 'repairVehicle')) this.repair(q, ready, hold);
     const squads = ready.filter((q) => !q.isLogistics && !q.support);
     const threats = this.threats();
     const attackers = Math.ceil(squads.length * 0.65);
     squads
       .sort((a, b) => b.strength - a.strength)
       .forEach((squad, i) => {
-        // Fall back when badly hurt; stay until whole again.
-        if (squad.airborne) return;
+        // Fall back when badly hurt; stay until whole again. A squad its repair vehicle is mending stays put.
+        if (squad.airborne || this.match.repairs.beingMended(squad)) return;
         if (squad.assignment === -1 && (squad.missing > 0 || squad.strength < 0.9)) return;
         if (squad.strength < 0.35) return this.send(squad, -1, side.base.x, side.base.z, true);
         const index = i < attackers || hold === null ? target : hold;
@@ -751,8 +807,9 @@ export class CommanderAI {
 
   /**
    * Call in its support as it's ready, where its squads can see: the artillery piece behind the point it holds at the
-   * front, away from the enemy's way in (or on the point), the minelayer on the point (or with a squad of its, the one
-   * nearest home first, to drive there from), the scout with the squad nearest the point it's attacking.
+   * front, away from the enemy's way in (or on the point), the repair vehicle where it waits (see REPAIR_BACK_M), the
+   * minelayer on the point (these two else with a squad of its, the one nearest home first), the scout with the squad
+   * nearest the point it's attacking.
    */
   private callSupport(ready: Squad[]): void {
     const D = this.match.deployments;
@@ -765,16 +822,91 @@ export class CommanderAI {
     for (const kind of DEPLOYS) {
       if (!D.available(kind) || D.readyIn(this.team, kind) > 0) continue;
       const spots: [number, number][] = [];
-      if (kind !== 'scout' && hold !== null) {
+      if (kind === 'repairVehicle') {
+        const at = this.repairPost(hold);
+        if (at) spots.push(at);
+      } else if (kind !== 'scout' && hold !== null) {
         const p = this.match.points[hold]!;
         const a = (this.towardEnemy(hold) * Math.PI) / 180;
         const back = kind === 'artilleryPiece' ? ARTILLERY_BACK_M : 0;
         spots.push([p.x - Math.sin(a) * back, p.z - Math.cos(a) * back], [p.x, p.z]);
       }
       if (kind === 'scout') spots.push(...squads.sort((a, b) => toGoal(a) - toGoal(b)).map((q) => q.centroid()!));
-      if (kind === 'minelayer') spots.push(...squads.sort((a, b) => toGoal(b) - toGoal(a)).map((q) => q.centroid()!));
+      if (kind === 'minelayer' || kind === 'repairVehicle') spots.push(...squads.sort((a, b) => toGoal(b) - toGoal(a)).map((q) => q.centroid()!));
       for (const [x, z] of spots) if (!D.call(this.team, kind, x, z)) break;
     }
+  }
+
+  /**
+   * Its recovery team, when it's ready, on the heaviest disabled mech's wreck its side can see (its own or the enemy's),
+   * with no enemy it knows of near.
+   */
+  private recover(): void {
+    const R = this.match.recovery;
+    if (!R || R.readyIn(this.team) > 0) return;
+    const known = this.known().filter((e) => e.alive && e.combat?.weapons.length);
+    const clear = (u: SeaUnit) => !known.some((e) => Math.hypot(e.x - u.x, e.z - u.z) < RECOVER_CLEAR_M);
+    const tonnage = (u: SeaUnit) => u.combat?.stats.tonnage ?? 0;
+    const wreck = this.world.units
+      .filter((u) => u.salvage && !u.alive && clear(u))
+      .sort((a, b) => tonnage(b) - tonnage(a))
+      .find((u) => !R.whyNot(this.team, u));
+    if (wreck) R.call(this.team, wreck);
+  }
+
+  /**
+   * Its repair vehicle mends the squad of its mechs that needs it most (away from the base, where they'd refit anyway),
+   * out of the fight, and calls the work off if the fight comes to it; it goes home to load when it's run low on points,
+   * and otherwise waits behind the point it holds at the front.
+   */
+  private repair(truck: Squad, ready: Squad[], hold: number | null): void {
+    const u = truck.repairer;
+    if (!u || truck.airborne) return;
+    const R = this.match.repairs;
+    const side = this.match.side(this.team);
+    const seen = [...this.world.battle.seenBy(this.team)].filter((e) => e.alive && e.combat?.weapons.length);
+    const threatened = (q: Squad) => {
+      const c = q.centroid();
+      return !c || q.alive.some((m) => m.target?.alive) || seen.some((e) => Math.hypot(e.x - c[0], e.z - c[1]) < REPAIR_CLEAR_M);
+    };
+    const mending = R.mending(truck);
+    if (mending) {
+      if (threatened(mending)) truck.hold();
+      return;
+    }
+    const points = u.repairPoints ?? 0;
+    if (points < MIN_REPAIR_POINTS || (truck.assignment === -1 && points < (u.repairCapacity ?? 0))) {
+      if (truck.assignment !== -1 || (!u.route.length && Math.hypot(u.x - side.base.x, u.z - side.base.z) > BASE_RADIUS * 0.7)) {
+        this.send(truck, -1, side.base.x, side.base.z, false);
+      }
+      return;
+    }
+    const need = (q: Squad) => R.mendable(q).reduce((s, m) => s + 1 - (m.combat?.integrity ?? 1), 0);
+    const away = (q: Squad) => {
+      const c = q.centroid()!;
+      return Math.hypot(c[0] - side.base.x, c[1] - side.base.z) > BASE_RADIUS;
+    };
+    const best = ready
+      .filter((q) => !q.support && !q.airborne && q.assignment !== -1 && q.centroid() && away(q) && !threatened(q))
+      .map((q) => ({ q, need: need(q) }))
+      .filter((e) => e.need >= REPAIR_NEED)
+      .sort((a, b) => b.need - a.need)[0];
+    if (best && !R.order(truck, best.q)) {
+      truck.assignment = null;
+      return;
+    }
+    const at = this.repairPost(hold);
+    if (at && !u.route.length) this.send(truck, hold!, at[0], at[1], false);
+  }
+
+  /** Where its repair vehicle waits: back from the point it holds at the front, toward its base (null with none). */
+  private repairPost(hold: number | null): [number, number] | null {
+    if (hold === null) return null;
+    const p = this.match.points[hold]!;
+    const base = this.match.side(this.team).base;
+    const d = Math.hypot(base.x - p.x, base.z - p.z) || 1;
+    const back = Math.min(REPAIR_BACK_M, d * REPAIR_BACK_SHARE);
+    return this.world.openNear(p.x + ((base.x - p.x) / d) * back, p.z + ((base.z - p.z) / d) * back, 'ground');
   }
 
   /** Its scout watches the point it's attacking from short of it, on its own side; hurt badly, it goes home. */
