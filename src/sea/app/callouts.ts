@@ -175,7 +175,8 @@ export class Callouts {
       if (!q) return;
       // A mech's pilot ejects as it goes down (a helicopter's goes down with it).
       if (unit.kind === 'mech' && !unit.flies) this.say(q, 'ejecting');
-      if (!q.alive.length) this.notice.show(`${q.name} has been wiped out`, 'alert');
+      // Its soldiers all gone (an APC left over doesn't count).
+      if (!unit.carrier && !q.riders.length) this.notice.show(`${q.name} has been wiped out`, 'alert');
       return;
     }
     // Soldiers fall too often to report each one.

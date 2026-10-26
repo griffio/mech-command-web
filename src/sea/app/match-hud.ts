@@ -102,10 +102,10 @@ export class MatchHud {
     });
     for (const [squad, card] of this.cards) {
       card.el.classList.toggle('selected', this.world.selectedSquads.has(squad));
-      card.el.classList.toggle('lost', !squad.alive.length);
+      card.el.classList.toggle('lost', !squad.riders.length);
       card.el.classList.toggle('pinned', squad.pinned);
       card.bar.style.width = `${Math.round(squad.strength * 100)}%`;
-      card.count.textContent = `${squad.alive.length}/${squad.spec.units.length}`;
+      card.count.textContent = `${squad.riders.length}/${squad.spec.units.length}`;
       card.status.textContent = squad.status(this.match.time);
     }
   }
@@ -114,7 +114,9 @@ export class MatchHud {
   private placeMarkers(camera: Camera, width: number, height: number): void {
     const seen = this.world.battle.seenBy(PLAYER_TEAM);
     for (const [squad, m] of this.markers) {
-      const alive = squad.alive.filter((u) => squad.team === PLAYER_TEAM || seen.has(u));
+      // Over its soldiers, not their APC behind them.
+      const riders = squad.riders.length ? squad.riders : squad.alive;
+      const alive = riders.filter((u) => squad.team === PLAYER_TEAM || seen.has(u));
       let show = alive.length > 0;
       if (show) {
         let x = 0;

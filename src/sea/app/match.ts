@@ -8,7 +8,7 @@
 // and every point lost; a side loses when its tickets run out, or when the other side holds every point.
 //
 // Infantry are slow and keep to land: a Karnov airlifts them (airlift.ts), and trucks and tracked vehicles across
-// water. Infantry that stand still a while dig in
+// water; a squad with an APC rides it on long moves (carriers.ts). Infantry that stand still a while dig in
 // behind sandbags, and are much harder to hit. Fire pins soldiers down (suppression.ts): pinned, they don't count
 // toward taking a point. Supply trucks build forward bases where squads come back, reinforce and
 // refit nearer the front (logistics.ts).
@@ -18,6 +18,7 @@ import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import { SIGHT_RANGE, bestRange } from '../sim/combat';
 import { Airlift } from './airlift';
 import type { Attacker } from './battle';
+import { Carriers } from './carriers';
 import { FOB_RADIUS, Logistics, type ServicePoint } from './logistics';
 import { Squad } from './squads';
 import { CALL_INS, Support, type CallIn } from './support';
@@ -125,6 +126,8 @@ export class Match {
   /** AI commanders, by team (the player's side has none, unless a test adds one). */
   readonly commanders = new Map<number, CommanderAI>();
   readonly airlift: Airlift;
+  /** Squads' APCs. */
+  readonly carriers: Carriers;
   /** Supply trucks and forward bases, when the scenario has them. */
   logistics: Logistics | null = null;
   /** Strikes the sides call in, when the scenario has them. */
@@ -145,6 +148,8 @@ export class Match {
     readonly scenario: Scenario,
   ) {
     this.airlift = new Airlift(world, scenario.transport ? world.propPath(scenario.transport) : null);
+    this.carriers = new Carriers(world);
+    this.carriers.onEvent = (text, team) => this.onEvent(text, team);
     this.sides = scenario.sides.map((s) => ({
       team: s.team,
       name: s.name,
@@ -234,6 +239,7 @@ export class Match {
     if (this.winner !== null) return;
     this.time += dt;
     this.airlift.update(dt);
+    this.carriers.update(dt);
     this.logistics?.update(dt);
     this.support?.update(dt);
     this.capture(dt);
@@ -251,6 +257,16 @@ export class Match {
     const side = this.sides.find((s) => s.team === u.team);
     if (side) side.tickets -= ticketCost(u);
     this.onSignal({ kind: 'destroyed', unit: u, by });
+    this.carriers.lost(u, by);
+  }
+
+  /**
+   * Send a squad to a point: in its APC when that's quicker (carriers.ts), else on its own feet, wheels or tracks.
+   * Returns how many members have a way there.
+   */
+  moveSquad(squad: Squad, x: number, z: number, retreat = false): number {
+    if (this.carriers.ride(squad, x, z, retreat)) return squad.alive.length;
+    return squad.move(this.world, x, z, retreat);
   }
 
   /** Units in a point's circle take it; helicopters can't (code/warrior.cpp: canCapture). */
@@ -300,6 +316,8 @@ export class Match {
     // The Karnov flies from whichever of the side's bases is nearest the squad.
     const at = squad.centroid()!;
     const from = this.logistics?.departure(side.team, at[0], at[1]) ?? side.base;
+    // Out of its APC first: the Karnov takes the APC too.
+    this.carriers.cancel(squad);
     void this.airlift.request(squad, from, side.paint, x, z);
     if (squad.team === PLAYER_TEAM) this.onEvent(`${squad.name}: the Karnov is on its way`, squad.team);
     return true;
@@ -309,8 +327,8 @@ export class Match {
   private garrison(dt: number): void {
     for (const side of this.sides) {
       for (const squad of side.squads) {
-        const alive = squad.alive;
-        const still = squad.isInfantry && !squad.airborne && alive.every((u) => !u.route.length && !u.embarked);
+        const alive = squad.riders;
+        const still = squad.isInfantry && !squad.airborne && !squad.ride && alive.every((u) => !u.route.length && !u.embarked);
         // Pinned down, they can't dig in (but a squad already dug in stays so).
         const pinned = alive.some((u) => u.pinned);
         squad.stillFor = still ? squad.stillFor + (pinned && !squad.dugIn ? 0 : dt) : 0;
@@ -336,9 +354,11 @@ export class Match {
     for (const side of this.sides) {
       side.squads.forEach((squad, i) => {
         const alive = squad.alive;
-        if (!alive.length && this.spawning === 0) {
+        // Wiped out: its APC, if that's left, goes back to the base to meet it.
+        if (!squad.riders.length && this.spawning === 0) {
           if (squad.respawnAt === null) {
             squad.respawnAt = this.time + (squad.spec.units.some((t) => this.world.typeKind(t) === 'mech') ? RESPAWN_S.mech : RESPAWN_S.other);
+            if (alive.length && !squad.airborne) squad.move(this.world, side.base.x, side.base.z);
           } else if (this.time >= squad.respawnAt) {
             squad.respawnAt = null;
             const { point, why } = this.respawnPoint(side, squad);
@@ -387,13 +407,14 @@ export class Match {
     return { point, why };
   }
 
-  /** The unit types a squad is missing. */
+  /** The unit types a squad is missing (its APC last). */
   private missingTypes(squad: Squad): string[] {
     const types = squad.spec.units.slice();
-    for (const u of squad.alive) {
+    for (const u of squad.riders) {
       const k = types.indexOf(u.typeKey ?? '');
       if (k >= 0) types.splice(k, 1);
     }
+    if (squad.spec.carrier && !squad.carrier) types.push(squad.spec.carrier);
     return types;
   }
 
@@ -713,7 +734,8 @@ export class CommanderAI {
 
   /**
    * Order a squad to a place, unless it already has that job and is there or on its way. Infantry fly to goals they
-   * can't reach on foot, or that are far: set down short of the goal, clear of the enemy, to walk in from there.
+   * can't reach on foot, or that are far (unless their APC can drive them): set down short of the goal, clear of the
+   * enemy, to walk in from there.
    */
   private send(squad: Squad, assignment: number, x: number, z: number, retreat: boolean): void {
     const c = squad.centroid();
@@ -724,9 +746,10 @@ export class CommanderAI {
     const [tx, tz] = [x + (Math.random() - 0.5) * 30, z + (Math.random() - 0.5) * 30];
     const far = c && Math.hypot(c[0] - tx, c[1] - tz) > AI_AIRLIFT_M;
     const unreachable = c && this.world.grids && !this.world.grids.ground.connected(c[0], c[1], tx, tz);
+    const rides = !unreachable && this.match.carriers.quicker(squad, tx, tz);
     // Falling back flies only when there's no way home on foot, and straight home. Vehicles drive whatever the distance,
     // and fly only across water (the LRM carriers, from the Liao base's island).
-    if (squad.airliftable && c && (unreachable || (squad.isInfantry && far && !retreat))) {
+    if (squad.airliftable && c && (unreachable || (squad.isInfantry && far && !retreat && !rides))) {
       const lz = retreat ? { at: [tx, tz] as [number, number], safe: true } : this.landingZone(c, tx, tz);
       // A far goal is worth the flight only to a safe spot that saves a good walk; one out of reach on foot, to the
       // clearest spot there is.
@@ -736,6 +759,6 @@ export class CommanderAI {
         return;
       }
     }
-    squad.move(this.world, tx, tz, retreat);
+    this.match.moveSquad(squad, tx, tz, retreat);
   }
 }

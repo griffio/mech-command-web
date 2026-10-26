@@ -90,7 +90,8 @@
             "infantry"
           ],
           "gunnery": 45,
-          "voice": "pilot3"
+          "voice": "pilot3",
+          "carrier": "apc1"
         },
         {
           "name": "Delta",
@@ -191,7 +192,8 @@
             "infantry",
             "infantry"
           ],
-          "gunnery": 38
+          "gunnery": 38,
+          "carrier": "heavyapc"
         },
         {
           "name": "Monkey",

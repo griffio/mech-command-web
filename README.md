@@ -2,9 +2,9 @@
 
 A small real-time tactics game for iPad and desktop browsers, built from
 MechCommander 2's maps, buildings, mechs, vehicles, infantry, voices and music.
-You command squads of mechs, infantry, helicopters and a supply truck in an
+You command squads of mechs, infantry, an APC, helicopters and a supply truck in an
 Advance and Secure match after the game *Squad*: take the capture points in
-order, fly infantry in to hold them, and build forward bases to fight from. No native
+order, fly or drive infantry in to hold them, and build forward bases to fight from. No native
 code: the original data is converted offline into glTF, WebP, PNG, JSON and AAC.
 
 - **The game** (`index.html`) draws with WebGPU: the FFT sea and physically based
@@ -105,9 +105,10 @@ is remembered.
 
 The game plays a scenario (`scenarios/*.json`, chosen by map), modelled on the
 game *Squad*. You command squads in real time: two lances of mechs, a rifle
-squad, a squad of Elementals (power armour), a pair of helicopters and a supply
-truck. The Liao garrison has two lances, an armour squad, LRM carriers,
-riflemen, Elementals and helicopters, run by a simple AI commander.
+squad with its APC, a squad of Elementals (power armour), a pair of helicopters
+and a supply truck. The Liao garrison has two lances, an armour squad, LRM
+carriers, riflemen with a troop transport, Elementals and helicopters, run by a
+simple AI commander.
 
 - **Points.** Five capture points run along the islands from your base to
   theirs. Each side can take only the next point beyond the ones it holds:
@@ -138,6 +139,22 @@ riflemen, Elementals and helicopters, run by a simple AI commander.
   squad can't be hurt while aboard. It carries supply trucks and tracked vehicles
   the same way: the Liao base is on an island of its own, so its LRM carriers
   fly to the fight.
+- **APCs.** Charlie, your rifle squad, has MC2's APC (15 t, unarmed, 23 m/s),
+  and the Liao riflemen its troop transport (25 t, more armour, 15 m/s). Send
+  the squad somewhere its APC gets it to sooner than it would walk (200 m or
+  more): the squad waits while the APC drives over, walks to it and gets in, and
+  rides there at the APC's top speed, about four times as fast as soldiers walk
+  (MC2's run; other vehicles go at its walk, 9 m/s). They get out in a ring
+  round it at the other end, and the APC waits 40 m behind them; on shorter moves
+  it follows on behind. They also get out as soon as fire lands about the APC or
+  an enemy is seen within 150 m of it, and go on on foot while it backs off 80 m.
+  Stop, an attack order or an airlift gets them out where they are (the Karnov
+  carries the APC too). If it's destroyed with them aboard, each soldier has an
+  even chance of getting out alive. A lost APC costs a ticket, and the squad gets
+  a new one at a base like a missing member. MC2 has the makings of this,
+  compiled out: Elementals boarding a carrier (`TACTICAL_ORDER_LOAD_INTO_CARRIER`,
+  ten seats) and getting out round it. In MC2's missions the APCs are only convoy
+  targets.
 - **Helicopters.** In MC2 a helicopter is a mech that flies (its object file
   says `MoveType = 1`), and each side has a pair: an Attack Copter (one AC10)
   and a Heavy Copter (four Streak SRM2s and two pulse lasers). As in MC2 they
@@ -218,7 +235,8 @@ riflemen, Elementals and helicopters, run by a simple AI commander.
 The AI sends most of its squads at the point it can take next, holds the
 one it must keep with the rest, stands its LRM carriers off behind the attack,
 flies its infantry to far or cut-off points (and its vehicles to cut-off ones),
-and pulls badly hurt squads back to
+drives its riflemen in their troop transport where that's quicker, and pulls
+badly hurt squads back to
 reinforce. It sends its helicopters with the attack, and lands them at its base
 to refit. Its Karnovs set infantry down out of sight of every enemy it has seen
 in the last minute, and well clear of any point you hold or have units in (the
@@ -231,7 +249,10 @@ match runs about 8 to 10 minutes. Before the helicopters, on Easy your side won
 five of six, by 15 to 64 tickets, and Liao one by 16 (your pilots are the
 better: gunnery 45 to 55 against Liao's 38 to 42); on Normal and Hard, Liao won
 four of six (three of each: too few to tell the two apart). With them, on
-Normal your side won five of six, by 13 to 49 tickets, and Liao one by 20. A
+Normal your side won five of six, by 13 to 49 tickets, and Liao one by 20. With
+the APCs too, your side won all three, by 24 to 96: each side rode two to four
+times a match, nearly every ride ending with the soldiers getting out under fire
+short of the point, and in nine matches one APC was lost with a squad aboard. A
 match can swing by 70 tickets, so a handful of matches shows a trend at best. `?scenario=none` shows the mission's
 own units instead (your lance is then its three mechs plus an Atlas and a
 Madcat), and `?speed=4` runs the world four times as fast (for testing).
@@ -239,7 +260,12 @@ Madcat), and `?speed=4` runs the world four times as fast (for testing).
 Orders are routed over MC2's movement map (`src/sea/sim/move-grid.ts`): A* over its
 300×300 cells of 8.5 m with the engine's rules (no off-map cells or deep water,
 shallow water and passable ground only, forest about 2.8× the cost of clear
-ground), then pulled tight so routes only turn where something is in the way. A
+ground), then pulled tight so routes only turn where something is in the way.
+Ground vehicles, hovercraft and infantry (in MC2's code its soldiers are ground
+vehicles too) keep to the roads: a road cell costs them a quarter of clear ground
+(`MOVEPARAM_FOLLOW_ROADS`, set for every ground vehicle). They're no faster
+there, so a route by road can be the longer one: from your base to the Ridge
+it's about 1.6 km, a fifth of it on road, where a mech walks 1.35 km. A
 squad's members take formation slots about the point, the nearest in the middle,
 and squads sent together spread out side by side.
 

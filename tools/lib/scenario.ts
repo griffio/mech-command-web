@@ -22,6 +22,11 @@ export interface ScenarioSquad {
   gunnery: number;
   /** Whose voice it talks in over the radio: an MC2 pilot's sounds (sound/pilots/pilot1..pilot26). */
   voice?: string;
+  /**
+   * An APC that carries its soldiers on long moves (an object file name: "apc1", "heavyapc"). It comes with the squad,
+   * and is replaced at a base like a member.
+   */
+  carrier?: string;
 }
 
 export interface ScenarioSide {
@@ -130,6 +135,7 @@ export function scenarioNeeds(scenarios: Scenario[]): {
       props.add(side.flag.toLowerCase());
       for (const squad of side.squads) {
         for (const u of squad.units) units.add(u.toLowerCase());
+        if (squad.carrier) units.add(squad.carrier.toLowerCase());
         if (squad.voice) voices.add(squad.voice.toLowerCase());
       }
     }

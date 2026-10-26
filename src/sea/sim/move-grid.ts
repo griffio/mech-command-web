@@ -1,6 +1,7 @@
 // MC2's movement map (mclib/move.h MapCell, mclib/move.cpp MoveMap::setUp) and an A* pathfinder over it, for each way
 // of moving: mechs wade the shallows (MC2's own rule), hovercraft cross any water, ground vehicles and infantry keep
-// to land and fords, and helicopters fly over all of it (MC2's move level 2).
+// to land and fords, and helicopters fly over all of it (MC2's move level 2). Ground vehicles and hovercraft (MC2's
+// infantry are ground vehicles too) keep to the roads.
 //
 // The map is 3 cells to a terrain tile: 300 x 300 cells of 8.5 m for mc2_01, row 0 at the north edge, laid over the
 // same square as the terrain. World positions are the WebGPU page's metres (x east, z south).
@@ -10,6 +11,7 @@ const OFFMAP = 1 << 9;
 const SHALLOW = 1 << 26;
 const DEEP = 1 << 27;
 const FOREST = 1 << 28;
+const ROAD = 1 << 25;
 
 /**
  * Relative costs. The engine's clear cost is a cell's length over the mover's top speed times 50 (about 28 for a
@@ -17,6 +19,12 @@ const FOREST = 1 << 28;
  */
 const CLEAR = 1;
 const FOREST_EXTRA = 1.8;
+/**
+ * A road cell costs a quarter of clear ground to whatever follows roads (MOVEPARAM_FOLLOW_ROADS, which every
+ * GroundVehicle sets, code/gvehicl.cpp): routes keep to them. They're no quicker to drive. The search's estimate counts
+ * clear ground, so a route takes a road that goes its way rather than going far round to one.
+ */
+const ROAD_COST = CLEAR / 4;
 const BLOCKED = Infinity;
 const DIAGONAL = Math.SQRT2;
 /** Ground vehicles and infantry ford water this deep at most, metres. */
@@ -57,7 +65,7 @@ export class MoveGrid {
       else if (moveClass === 'hover' && d & (SHALLOW | DEEP)) c = CLEAR;
       // Mechs wade shallow water and are kept out of deep water (MOVEPARAM_WATER_SHALLOW, mclib/move.cpp:4886).
       else if (d & DEEP || !(d & PASSABLE)) c = BLOCKED;
-      else c = CLEAR + (d & FOREST ? FOREST_EXTRA : 0);
+      else c = (d & ROAD && (moveClass === 'ground' || moveClass === 'hover') ? ROAD_COST : CLEAR) + (d & FOREST ? FOREST_EXTRA : 0);
       if (moveClass === 'ground' && c < BLOCKED) {
         const [x, z] = this.centre(Math.floor(i / width), i % width);
         if (depthAt(x, z) > FORD_M) c = BLOCKED;

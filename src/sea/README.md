@@ -40,11 +40,13 @@ New:
 - `sim/combat.ts`: MC2's combat rules; `app/battle.ts`: targets, fire, damage and wrecks on those rules (see
   Gameplay below); `app/unit-bars.ts`: health bars over the units, and a job's progress (a truck building).
 - `sim/move-grid.ts`: routes over MC2's movement map, one per way of moving (mechs wade the shallows, hovercraft cross
-  water, ground units keep to land and fords), with connected regions to tell what can't be reached on foot.
+  water, ground units keep to land and fords, and they and hovercraft to the roads), with connected regions to tell
+  what can't be reached on foot.
 - `app/match.ts`: Advance and Secure on a scenario (`scenarios/*.json`): capture points, tickets, bases that
   reinforce and refit, fog of war, infantry digging in, the AI commander, and the difficulty (the enemy pilots'
   gunnery; its button and memory in `main.ts`). `app/squads.ts`: squads (formation
   moves, attacks, strength). `app/airlift.ts`: the Karnov flying infantry, on its own landing and take-off clips.
+  `app/carriers.ts`: a rifle squad's APC fetching it, carrying it on long moves, and getting it out (under fire too).
   `app/suppression.ts`: fire landing near units suppresses them (worse aim) and pins soldiers down; its numbers.
   `app/support.ts`: artillery and air strikes called in on a spot: readiness, the marker and ring, the fighter's
   bombing run, and the bursts (the damage is `Battle.bombard`, on MC2's rule).

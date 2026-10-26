@@ -219,7 +219,9 @@ export class Battle {
     this.routes = 0;
     for (const u of units) {
       if (u.flies) this.lifting(u);
-      this.chooseTarget(u);
+      // Nothing to shoot with (a truck, an APC, a tent): nothing to aim at.
+      if (u.combat!.weapons.length) this.chooseTarget(u);
+      else u.target = null;
       this.close(u);
       this.shoot(u);
     }
@@ -591,6 +593,13 @@ export class Battle {
         }
       }
     }
+  }
+
+  /** A unit is killed outright, by whoever did it (soldiers aboard an APC that's destroyed: carriers.ts). */
+  kill(t: SeaUnit, by: Attacker): void {
+    if (!t.alive || !t.combat || this.immortal) return;
+    const report = t.combat.takeHit(t.combat.hitLocation('front', this.rng), 1e6, this.rng);
+    if (!t.alive) this.destroyed(t, by, report);
   }
 
   /** One of a strike's bursts: the explosion, its sound, and heads down about it (everyone's: it's no one's shot). */

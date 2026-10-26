@@ -1,6 +1,7 @@
 // Squads: the units the commander orders as one. A squad moves in formation (each member routed to its own slot about
 // the destination), attacks as one (when its target falls, the target's squadmates are next), and is reinforced at its
-// side's base. Its members can be mechs, vehicles or infantry, and its spacing suits them.
+// side's base. Its members can be mechs, vehicles or infantry, and its spacing suits them. A squad of soldiers may have
+// an APC to carry them (carriers.ts); on foot, they have it follow on behind.
 import type { ScenarioSquad } from '../../assets';
 import type { SeaUnit, World } from './world';
 
@@ -9,6 +10,8 @@ const SUPPRESSED = 0.3;
 
 /** Metres between members in formation, by the squad's largest kind of unit. */
 const SPACING = { mech: 18, vehicle: 14, infantry: 6 } as const;
+/** A squad's APC waits this far behind where its soldiers go, on the side it comes from, metres. */
+const CARRIER_BEHIND_M = 40;
 
 export type SquadOrder =
   | { kind: 'hold' }
@@ -28,6 +31,8 @@ export class Squad {
   assignment: number | null = null;
   /** A Karnov is coming for it, or carrying it. */
   airborne = false;
+  /** Riding its APC (carriers.ts): waiting for it to come, getting in, or aboard; null on foot. */
+  ride: 'waiting' | 'boarding' | 'aboard' | null = null;
   /** Infantry that have stood still long enough are dug in (harder to hit, behind sandbags). */
   dugIn = false;
   stillFor = 0;
@@ -55,10 +60,20 @@ export class Squad {
     return alive.length > 0 && alive.every((u) => u.flies);
   }
 
-  /** Everyone left in it is on foot (it can dig in, and be airlifted). */
+  /** Everyone left in it, but its APC, is on foot (it can dig in, and be airlifted). */
   get isInfantry(): boolean {
-    const alive = this.alive;
-    return alive.length > 0 && alive.every((u) => u.kind === 'infantry');
+    const riders = this.riders;
+    return riders.length > 0 && riders.every((u) => u.kind === 'infantry');
+  }
+
+  /** Its APC, while it has one. */
+  get carrier(): SeaUnit | null {
+    return this.units.find((u) => u.alive && u.carrier) ?? null;
+  }
+
+  /** Its living members but its APC (the soldiers it carries). */
+  get riders(): SeaUnit[] {
+    return this.units.filter((u) => u.alive && !u.carrier);
   }
 
   constructor(
@@ -75,33 +90,35 @@ export class Squad {
     return this.units.filter((u) => u.alive);
   }
 
-  /** Members alive against its full size, weighted by their armour left (0..1). */
+  /** Members alive (but its APC) against its full size, weighted by their armour left (0..1). */
   get strength(): number {
     let s = 0;
-    for (const u of this.units) if (u.alive) s += u.combat?.integrity ?? 1;
+    for (const u of this.riders) s += u.combat?.integrity ?? 1;
     return s / this.spec.units.length;
   }
 
+  /** Members it's short of, its APC among them. */
   get missing(): number {
-    return this.spec.units.length - this.alive.length;
+    return this.spec.units.length - this.riders.length + (this.spec.carrier && !this.carrier ? 1 : 0);
   }
 
-  /** The most suppressed of its members (0..1). */
+  /** The most suppressed of its members, but its APC (0..1). */
   get suppression(): number {
     let s = 0;
-    for (const u of this.units) if (u.alive) s = Math.max(s, u.suppression);
+    for (const u of this.riders) s = Math.max(s, u.suppression);
     return s;
   }
 
-  /** At least half of it is pinned down. */
+  /** At least half of it (not counting its APC) is pinned down. */
   get pinned(): boolean {
-    const alive = this.alive;
+    const alive = this.riders;
     return alive.length > 0 && alive.filter((u) => u.pinned).length * 2 >= alive.length;
   }
 
-  /** The middle of its living members, or null when none are left. */
+  /** The middle of its living members (but its APC, while it has others), or null when none are left. */
   centroid(): [number, number] | null {
-    const alive = this.alive;
+    const riders = this.riders;
+    const alive = riders.length ? riders : this.alive;
     if (!alive.length) return null;
     let x = 0;
     let z = 0;
@@ -113,7 +130,7 @@ export class Squad {
   }
 
   get spacing(): number {
-    const kinds = new Set(this.alive.map((u) => u.kind));
+    const kinds = new Set(this.riders.map((u) => u.kind));
     return kinds.has('mech') ? SPACING.mech : kinds.has('vehicle') ? SPACING.vehicle : SPACING.infantry;
   }
 
@@ -122,6 +139,7 @@ export class Squad {
     if (this.respawnAt !== null) return `back in ${Math.max(0, Math.ceil(this.respawnAt - now))} s`;
     const alive = this.alive;
     if (this.airborne) return alive.some((u) => u.embarked) ? 'airlifted' : 'awaiting the Karnov';
+    if (this.ride) return this.ride === 'aboard' ? 'in the APC' : this.ride === 'boarding' ? 'boarding the APC' : 'waiting for the APC';
     if (this.isLogistics) {
       const supply = `supply ${Math.floor(alive[0]!.supply ?? 0)}`;
       return this.task ? `${this.task} · ${supply}` : alive.some((u) => u.route.length) ? `moving · ${supply}` : supply;
@@ -139,35 +157,39 @@ export class Squad {
   }
 
   /**
-   * Move in formation to a point: each member to a slot about it, the nearest members taking the middle slots. Returns
-   * how many members have a way there.
+   * Move in formation to a point: each member to a slot about it, the nearest members taking the middle slots, and its
+   * APC to wait behind them. Returns how many members have a way there.
    */
   move(world: World, x: number, z: number, retreat = false): number {
     this.order = retreat ? { kind: 'retreat', x, z } : { kind: 'move', x, z };
-    const alive = this.alive.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
-    const slots = formationSlots(alive.length, this.spacing);
+    const riders = this.riders;
+    const members = (riders.length ? riders : this.alive).sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
+    const slots = formationSlots(members.length, this.spacing);
     let routed = 0;
-    alive.forEach((u, i) => {
-      const [sx, sz] = world.openNear(x + slots[i]![0], z + slots[i]![1], u.moveClass);
-      const grid = world.gridFor(u);
-      const route = grid ? grid.findPath(u.x, u.z, sx, sz) : [[sx, sz] as [number, number]];
-      // A move order ends an attack order; the squad still fires at what it passes.
-      u.attackOrder = null;
-      u.engaging = false;
-      u.leash = { x, z };
-      // No way there: it stops rather than carry on with the old order.
-      if (route) {
-        u.walkTo(route);
-        routed++;
-      } else u.stop();
+    members.forEach((u, i) => {
+      if (go(world, u, x + slots[i]![0], z + slots[i]![1], x, z)) routed++;
     });
+    if (riders.length) this.park(world, x, z);
     return routed;
+  }
+
+  /**
+   * Send its APC to wait behind a point its soldiers go to, on the side the APC comes from (or `from`'s). False if it
+   * has none, or no way there.
+   */
+  park(world: World, x: number, z: number, from: [number, number] | null = null): boolean {
+    const c = this.carrier;
+    if (!c) return false;
+    const [fx, fz] = from ?? [c.x, c.z];
+    const d = Math.hypot(fx - x, fz - z) || 1;
+    const back = Math.min(d, CARRIER_BEHIND_M);
+    return go(world, c, x + ((fx - x) / d) * back, z + ((fz - z) / d) * back, x, z);
   }
 
   attack(target: SeaUnit): void {
     this.order = { kind: 'attack', target };
     for (const u of this.alive) {
-      if (!u.combat) continue;
+      if (!u.combat?.weapons.length) continue;
       u.attackOrder = target;
       u.target = target;
       u.leash = null;
@@ -183,6 +205,23 @@ export class Squad {
       u.stop();
     }
   }
+}
+
+/**
+ * Route a member to a spot (moved onto ground it can stand on) for a squad sent to (x, z). False when there's no way
+ * there: it stops rather than carry on with an old order.
+ */
+function go(world: World, u: SeaUnit, sx: number, sz: number, x: number, z: number): boolean {
+  [sx, sz] = world.openNear(sx, sz, u.moveClass);
+  const grid = world.gridFor(u);
+  const route = grid ? grid.findPath(u.x, u.z, sx, sz) : [[sx, sz] as [number, number]];
+  // A move order ends an attack order; the squad still fires at what it passes.
+  u.attackOrder = null;
+  u.engaging = false;
+  u.leash = { x, z };
+  if (route) u.walkTo(route);
+  else u.stop();
+  return !!route;
 }
 
 /** Offsets for `count` units about a point: the middle, then rings of six, twelve, ... `spacing` apart. */

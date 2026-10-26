@@ -28,7 +28,7 @@ import { Match } from './match';
 import { formationSlots, type Squad } from './squads';
 
 const TURN_RATE = 120; // degrees per second
-/** Every ground vehicle moves at this, metres a second (gamesys.fit). */
+/** Every ground vehicle walks at this, metres a second (gamesys.fit WalkSpeed); running, at its MaxVelocity (code/gvehicl.cpp). */
 const VEHICLE_SPEED = 9;
 /** How fast a vehicle's turret turns, degrees a second. */
 const TURRET_RATE = 180;
@@ -50,6 +50,8 @@ const TYPE_NAMES: Record<string, string> = {
   lrmcarrier: 'LRM Carrier',
   harasser: 'Harasser',
   repairtruck: 'Supply truck',
+  apc1: 'APC',
+  heavyapc: 'Troop transport',
   mediumautocannonturret: 'Autocannon turret',
 };
 
@@ -196,6 +198,11 @@ export class SeaUnit {
     return stats && 'hover' in stats && stats.hover ? 'hover' : 'ground';
   }
 
+  /** Its squad's APC (see carriers.ts). */
+  get carrier(): boolean {
+    return this.typeKey !== null && this.squad?.spec.carrier === this.typeKey;
+  }
+
   /** A helicopter. */
   get flies(): boolean {
     return this.moveClass === 'air';
@@ -306,12 +313,15 @@ export class SeaUnit {
     return !this.animator || this.animator.finished;
   }
 
-  /** Speed from the gesture data (MC2 gives it in metres a second already); vehicles all move alike; infantry at theirs. */
+  /**
+   * Speed from the gesture data (MC2 gives it in metres a second already); vehicles all move alike (MC2's walk), but an
+   * APC, with no guns to bring to bear, at its top speed (MC2's run); infantry at theirs.
+   */
   get speed(): number {
     const stats = this.combat?.stats;
     if (this.kind === 'structure') return 0;
     if (this.kind === 'infantry') return stats && 'speed' in stats ? stats.speed : 5;
-    if (this.kind === 'vehicle') return VEHICLE_SPEED;
+    if (this.kind === 'vehicle') return this.carrier && stats && 'speed' in stats ? stats.speed : VEHICLE_SPEED;
     return this.info?.clips[this.running ? 'run' : 'walk']?.startVelocity ?? 10;
   }
 
@@ -930,7 +940,8 @@ export class World {
 
   /**
    * Send the selected squads to a point, side by side across their line of advance (the squad nearest the point in the
-   * middle), each in its own formation. Infantry that can't get there on foot (or are told to fly) are airlifted.
+   * middle), each in its own formation. Infantry that can't get there on foot (or are told to fly) are airlifted; those
+   * with an APC ride in it when that's quicker.
    */
   private orderSquadsMove(x: number, z: number, airlift = false): number {
     const squads = [...this.selectedSquads].filter((q) => q.alive.length);
@@ -953,7 +964,7 @@ export class World {
       const c = q.centroid()!;
       const walkable = this.grids?.ground.connected(c[0], c[1], tx, tz) ?? true;
       if (q.airliftable && (airlift || !walkable) && this.match?.airliftSquad(q, tx, tz)) return { squad: q, order: 'airlift', refused: null };
-      return { squad: q, order: 'move', refused: q.move(this, tx, tz) ? null : `${q.name} can't get there` };
+      return { squad: q, order: 'move', refused: this.match!.moveSquad(q, tx, tz) ? null : `${q.name} can't get there` };
     });
     this.onOrders(reports);
     return reports.filter((r) => !r.refused).length;
