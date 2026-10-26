@@ -41,8 +41,8 @@ export class Animator {
   }
 
   /**
-   * Switch to a clip, blending from the one playing over `fade` seconds. A clip that doesn't `loop` holds its last frame.
-   * Unknown names are ignored.
+   * Switch to a clip, blending from the one playing over `fade` seconds. A clip that doesn't `loop` holds its last frame
+   * (from the first if `startTime` is past its end). Unknown names are ignored.
    */
   play(name: string, fade = 0.2, startTime = 0, loop = true): void {
     const clip = this.model.clips.get(name);
@@ -50,7 +50,7 @@ export class Animator {
     this.previous = this.current && fade > 0 ? this.current : null;
     this.fade = 0;
     this.fadeLength = fade;
-    this.current = { clip, time: startTime % Math.max(clip.duration, 1e-3), loop };
+    this.current = { clip, time: loop ? startTime % Math.max(clip.duration, 1e-3) : Math.min(startTime, clip.duration), loop };
     this.clipName = name;
   }
 

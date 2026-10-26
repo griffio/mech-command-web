@@ -79,6 +79,8 @@ export type Noise =
   | { kind: 'fire'; weapon: number; at: V3; by: SeaUnit }
   | { kind: 'impact'; weapon: number; at: V3; on: SeaUnit; by: SeaUnit }
   | { kind: 'blast'; blast: Blast; at: V3; on: SeaUnit }
+  /** A helicopter taking off (`up`) or setting down. */
+  | { kind: 'lift'; up: boolean; at: V3; on: SeaUnit }
   /** A strike on its way (5.5 s out, as the engine plays it), and each of its bursts as it lands. */
   | { kind: 'incoming' | 'burst'; at: V3 };
 
@@ -162,6 +164,8 @@ export class Battle {
   private readonly circleAt = new Map<SeaUnit, number>();
   private readonly orbit = new Map<SeaUnit, number>();
   private readonly nextSmoke = new Map<SeaUnit, number>();
+  /** Each helicopter's flight as of the last tick (see lifting). */
+  private readonly flights = new Map<SeaUnit, SeaUnit['flight']>();
 
   constructor(
     private readonly world: World,
@@ -189,6 +193,7 @@ export class Battle {
     this.sight.clear();
     this.nextMove.clear();
     this.circleAt.clear();
+    this.flights.clear();
     this.outcome = null;
     this.tickIn = 0;
   }
@@ -213,6 +218,7 @@ export class Battle {
     this.look(units);
     this.routes = 0;
     for (const u of units) {
+      if (u.flies) this.lifting(u);
       this.chooseTarget(u);
       this.close(u);
       this.shoot(u);
@@ -241,6 +247,20 @@ export class Battle {
         this.seen.get(b.team)!.add(a);
       }
     }
+  }
+
+  /**
+   * A helicopter taking off or setting down raises dust under it (spray over water: MC2's helicopter dust cloud) and is
+   * heard as it starts.
+   */
+  private lifting(u: SeaUnit): void {
+    const was = this.flights.get(u);
+    this.flights.set(u, u.flight);
+    if (u.flight !== 'takingOff' && u.flight !== 'landing') return;
+    const ground = this.world.terrain.heightAt(u.x, u.z);
+    const at: V3 = [u.x, Math.max(ground, 0), u.z];
+    this.fx.groundHit(at, 1.1, ground < 0);
+    if (was !== undefined && was !== u.flight) this.onNoise({ kind: 'lift', up: u.flight === 'takingOff', at, on: u });
   }
 
   /** An ordered target, else the one it has while it's still seen and near enough, else the nearest enemy seen. */
@@ -405,11 +425,14 @@ export class Battle {
     this.circleAt.delete(u);
   }
 
-  /** Fire every weapon that can: loaded, in range, in sight (an LRM may use a teammate's), and aimed at the target. */
+  /**
+   * Fire every weapon that can: loaded, in range, in sight (an LRM may use a teammate's), and aimed at the target. A
+   * helicopter fires only in the air.
+   */
   private shoot(u: SeaUnit): void {
     const t = u.target;
     const combat = u.combat!;
-    if (!t || !t.alive) return;
+    if (!t || !t.alive || u.grounded) return;
     if (Math.abs(wrapDegrees(bearing(u, t) - u.aimYaw)) > FIRE_ARC) return;
     const d = Math.hypot(t.x - u.x, t.z - u.z);
     const own = this.sees(u, t);
@@ -547,13 +570,13 @@ export class Battle {
   /**
    * A strike lands at (x, z) (code/artlry.cpp, ArtilleryType::handleCollision): every unit on the ground within its minor
    * range takes its minor number of hits, within its major range the major number, each of its damage, on the location
-   * a hit from a side at random would land. Turrets and tents are hit only within the major range, aircraft not at all.
-   * It hits friend and foe alike.
+   * a hit from a side at random would land. Turrets and tents are hit only within the major range, aircraft not at all
+   * (helicopters only on the ground). It hits friend and foe alike.
    */
   bombard(x: number, z: number, s: StrikeStats, by: Attacker): void {
     if (this.immortal) return;
     for (const t of [...this.world.units]) {
-      if (!t.alive || !t.combat || t.embarked || t.altitude > 0) continue;
+      if (!t.alive || !t.combat || t.embarked || t.altitude > 0 || (t.flies && t.flight !== 'parked')) continue;
       const r = Math.hypot(t.x - x, t.z - z);
       if (r > s.minorRange || (t.kind === 'structure' && r > s.majorRange)) continue;
       const hits = r <= s.majorRange ? s.majorHits : s.minorHits;
@@ -596,8 +619,11 @@ export class Battle {
       return;
     }
     const at = t.nodePosition('weapon_centertorso') ?? [...t.instance.center];
-    this.fx.explosion(at, t.kind === 'mech' ? 1 : 0.75);
-    this.onNoise({ kind: 'blast', blast: t.kind === 'mech' ? 'mech' : t.kind === 'structure' ? 'structure' : 'vehicle', at, on: t });
+    // A helicopter blows up as a vehicle does (code/mech.cpp: VEHICLE_EXPLOSION_ID).
+    const mech = t.kind === 'mech' && !t.flies;
+    this.fx.explosion(at, mech ? 1 : 0.75);
+    this.onNoise({ kind: 'blast', blast: t.flies ? 'helicopter' : mech ? 'mech' : t.kind === 'structure' ? 'structure' : 'vehicle', at, on: t });
+    this.flights.delete(t);
     if (report.exploded) this.fx.explosion(at, 0.8);
     this.wrecks.push({ unit: t, since: this.time, nextPuff: this.time + 0.3, drawn: false });
     const side = (u: { team: number }) => (u.team === PLAYER_TEAM ? '' : 'enemy ');
@@ -620,13 +646,13 @@ export class Battle {
       if (age > BURN_S || this.time < w.nextPuff) continue;
       w.nextPuff = this.time + 0.25;
       const c = w.unit.instance.center;
-      this.fx.burning([c[0], c[1] - w.unit.instance.model.radius * 0.3, c[2]], 1.2 - (age / BURN_S) * 0.8);
+      this.fx.burning([c[0], c[1] - w.unit.size * 0.3, c[2]], 1.2 - (age / BURN_S) * 0.8);
     }
     // Live mechs that have lost much of their armour smoke.
     for (const u of this.world.units) {
       if (!u.alive || u.hidden || !u.combat || u.combat.integrity > 0.55 || this.time < (this.nextSmoke.get(u) ?? 0)) continue;
       this.nextSmoke.set(u, this.time + 0.35);
-      const at = u.nodePosition('smoke_torso') ?? u.nodePosition('joint_torso') ?? [...u.instance.center];
+      const at = u.nodePosition('smoke_torso') ?? u.nodePosition('smoke_body') ?? u.nodePosition('joint_torso') ?? [...u.instance.center];
       this.fx.damaged(at, 1.4 - u.combat.integrity);
     }
   }
@@ -646,8 +672,8 @@ export class Battle {
     // A vehicle's guns: on top, toward where its turret points.
     const c = u.instance.center;
     const r = (u.aimYaw * Math.PI) / 180;
-    const reach = u.instance.model.radius * 0.35;
-    return [c[0] + Math.sin(r) * reach, c[1] + u.instance.model.radius * 0.2, c[2] + Math.cos(r) * reach];
+    const reach = u.size * 0.35;
+    return [c[0] + Math.sin(r) * reach, c[1] + u.size * 0.2, c[2] + Math.cos(r) * reach];
   }
 
   private hitPoint(t: SeaUnit, location: string): V3 {
@@ -655,7 +681,7 @@ export class Battle {
     const p = node ? t.nodePosition(node) : null;
     if (p) return p;
     const c = t.instance.center;
-    const r = t.instance.model.radius;
+    const r = t.size;
     return [c[0] + this.jitter(r * 0.2), c[1] + (location === 'turret' ? r * 0.25 : this.jitter(r * 0.1)), c[2] + this.jitter(r * 0.2)];
   }
 

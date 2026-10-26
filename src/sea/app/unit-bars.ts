@@ -34,7 +34,7 @@ export class UnitBars {
         continue;
       }
       const c = u.instance.center;
-      const onScreen = want && camera.project(c[0], c[1] + u.instance.model.radius * 0.6, c[2], this.ndc) && Math.abs(this.ndc[0]) < 1.1 && Math.abs(this.ndc[1]) < 1.1;
+      const onScreen = want && camera.project(c[0], c[1] + u.size * 0.6, c[2], this.ndc) && Math.abs(this.ndc[0]) < 1.1 && Math.abs(this.ndc[1]) < 1.1;
       if (onScreen !== bar.shown) {
         bar.el.hidden = !onScreen;
         bar.shown = onScreen;

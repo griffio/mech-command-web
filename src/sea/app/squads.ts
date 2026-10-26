@@ -49,6 +49,12 @@ export class Squad {
     return alive.length > 0 && alive.every((u) => u.kind === 'infantry' || (u.kind === 'vehicle' && u.moveClass === 'ground'));
   }
 
+  /** Everyone left in it flies (helicopters: they can't take a point). */
+  get isAir(): boolean {
+    const alive = this.alive;
+    return alive.length > 0 && alive.every((u) => u.flies);
+  }
+
   /** Everyone left in it is on foot (it can dig in, and be airlifted). */
   get isInfantry(): boolean {
     const alive = this.alive;
@@ -125,8 +131,10 @@ export class Squad {
     if (this.dugIn) return (alive.some((u) => u.target && u.target.alive) ? 'dug in, fighting' : 'dug in') + suppressed;
     if (alive.some((u) => u.target && u.combat && u.target.alive)) return 'fighting' + suppressed;
     if (this.order.kind === 'retreat') return 'falling back';
+    if (alive.some((u) => u.flight === 'takingOff')) return 'taking off';
     if (alive.some((u) => u.route.length)) return 'moving';
     if (this.order.kind === 'attack') return 'attacking';
+    if (alive.every((u) => u.flight === 'parked')) return 'landed';
     return 'holding';
   }
 

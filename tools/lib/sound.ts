@@ -69,8 +69,8 @@ export const EFFECTS = {
 export type Effect = keyof typeof EFFECTS;
 
 /** Things that blow up, and the explosion each gets. */
-export type Blast = 'mech' | 'vehicle' | 'structure' | 'crit' | 'strike';
-const BLAST_EFFECTS: Record<Exclude<Blast, 'structure' | 'strike'>, string> = {
+export type Blast = 'mech' | 'vehicle' | 'structure' | 'crit' | 'strike' | 'helicopter';
+const BLAST_EFFECTS: Record<Exclude<Blast, 'structure' | 'strike' | 'helicopter'>, string> = {
   mech: 'mech destruct explosion',
   vehicle: 'vehicle explosion',
   crit: 'mech critical hit explosion',
@@ -82,6 +82,13 @@ const STRUCTURE_BITE = 73;
  * object (519) is a rock, and their gosFX effect is silent.
  */
 const STRIKE_BITE = 2;
+/** A helicopter shot down (mclib/sounds.h HELICOPTER_DEATH: sfx_HeloExplode). */
+const HELICOPTER_BITE = 114;
+/**
+ * A helicopter taking off and landing. The engine's names are the wrong way round, and so is its use of them
+ * (code/mech.cpp plays COPTER_POWERDN, bite 107 "Copter Power Up", as one starts up): taking off sounds the power-up.
+ */
+const FLIGHT_BITES = { takeOff: 107, land: 106 } as const;
 
 /** The hit explosion object (objects/*.fit) for each of the effects table's hit effects. */
 const HIT_OBJECTS: Record<string, string> = {
@@ -125,6 +132,8 @@ export interface SoundFile {
   /** Each weapon's firing sound and impact, by its component id. */
   weapons: Record<string, { fire?: Cue; hit?: Cue }>;
   blasts: Partial<Record<Blast, Cue>>;
+  /** A helicopter taking off and landing. */
+  flight?: Partial<Record<keyof typeof FLIGHT_BITES, Cue>>;
   /** The tunes shipped, by number (null when the converter had no ffmpeg to encode them); `mission` is each mission's. */
   music: { tracks: Record<string, string>; mission: Record<string, number>; calm: number; combat: number[]; won: number; lost: number } | null;
 }
@@ -238,6 +247,13 @@ export function soundSet(
   if (structure) blasts.structure = structure;
   const strike = bite(STRIKE_BITE);
   if (strike) blasts.strike = strike;
+  const helicopter = bite(HELICOPTER_BITE);
+  if (helicopter) blasts.helicopter = helicopter;
+  const flight: SoundFile['flight'] = {};
+  for (const [key, n] of Object.entries(FLIGHT_BITES) as [keyof typeof FLIGHT_BITES, number][]) {
+    const cue = bite(n);
+    if (cue) flight[key] = cue;
+  }
 
   // Tunes, encoded by the converter to AAC (the originals are MS ADPCM, which browsers don't all play).
   const tunes = new Map<string, string>();
@@ -250,7 +266,7 @@ export function soundSet(
     tracks[n] = out;
   }
   const music = { tracks, mission: { [mission.name]: mission.tune }, ...MUSIC, combat: [...MUSIC.combat] };
-  return { manifest: { radio, voices: voiceFiles, betty, effects, weapons, blasts, music }, files, tunes };
+  return { manifest: { radio, voices: voiceFiles, betty, effects, weapons, blasts, flight, music }, files, tunes };
 }
 
 /** A key's number from whichever section of the file has it (MC2's object files put these in different ones). */

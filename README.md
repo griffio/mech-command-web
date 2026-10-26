@@ -2,9 +2,9 @@
 
 A small real-time tactics game for iPad and desktop browsers, built from
 MechCommander 2's maps, buildings, mechs, vehicles, infantry, voices and music.
-You command squads of mechs, infantry and a supply truck in an Advance and
-Secure match after the game *Squad*: take the capture points in order, fly
-infantry in to hold them, and build forward bases to fight from. No native
+You command squads of mechs, infantry, helicopters and a supply truck in an
+Advance and Secure match after the game *Squad*: take the capture points in
+order, fly infantry in to hold them, and build forward bases to fight from. No native
 code: the original data is converted offline into glTF, WebP, PNG, JSON and AAC.
 
 - **The game** (`index.html`) draws with WebGPU: the FFT sea and physically based
@@ -96,18 +96,18 @@ should land (they show how long until they're ready again).
 **Easy**, **Normal** or **Hard** (top right) is the difficulty: how well the
 enemy's pilots shoot. Easy is the scenario as written, where yours are the
 better pilots; Normal and Hard make the enemy's 5 and 10 points likelier to hit
-(a pilot's gunnery is their chance to hit). The game starts on Normal, about an
-even fight. Tap it to change it: it takes effect at once, on the units already
-fighting too, and is remembered.
+(a pilot's gunnery is their chance to hit). The game starts on Normal. Tap it
+to change it: it takes effect at once, on the units already fighting too, and
+is remembered.
 **Music** and **Sound** next to it turn each on or off.
 
 ### Advance and Secure
 
 The game plays a scenario (`scenarios/*.json`, chosen by map), modelled on the
 game *Squad*. You command squads in real time: two lances of mechs, a rifle
-squad, a squad of Elementals (power armour) and a supply truck. The Liao garrison has two
-lances, an armour squad, LRM carriers, riflemen and Elementals, run by a simple
-AI commander.
+squad, a squad of Elementals (power armour), a pair of helicopters and a supply
+truck. The Liao garrison has two lances, an armour squad, LRM carriers,
+riflemen, Elementals and helicopters, run by a simple AI commander.
 
 - **Points.** Five capture points run along the islands from your base to
   theirs. Each side can take only the next point beyond the ones it holds:
@@ -115,8 +115,8 @@ AI commander.
   (an enemy point goes neutral first). The top bar shows tickets, each point's
   holder and progress, and the points in play (dashed).
 - **Tickets.** Every unit lost costs its side tickets (a mech by its weight, 4
-  to 10; an Elemental 2; a soldier or a vehicle 1, as a vehicle goes down to a hit
-  or two), and so does every point lost. A side loses when its tickets run out, or wins by
+  to 10; a helicopter or an Elemental 2; a soldier or a vehicle 1, as a vehicle
+  goes down to a hit or two), and so does every point lost. A side loses when its tickets run out, or wins by
   holding every point.
 - **Bases.** A wiped-out squad comes back at its base after a while. A squad
   standing at its base gets missing members back one at a time, and its
@@ -128,8 +128,8 @@ AI commander.
   often, Elementals 70%, and less again in woods), and as cheap as tickets go.
 - **Water.** Mechs wade the shallows MC2's movement map allows (up to about
   4 m), hovercraft (the Centipede and Harasser, flagged so in their object files)
-  cross any water, and tracked vehicles and infantry keep to land and fords
-  under a metre.
+  cross any water, tracked vehicles and infantry keep to land and fords
+  under a metre, and helicopters fly over all of it.
 - **Airlift.** Infantry are slow and keep to land, so MC2's Karnov VTOL flies
   them: select an infantry squad, press **Airlift** and tap where to drop it, or
   just send it somewhere it can't walk to. The Karnov lifts off from the base,
@@ -138,6 +138,18 @@ AI commander.
   squad can't be hurt while aboard. It carries supply trucks and tracked vehicles
   the same way: the Liao base is on an island of its own, so its LRM carriers
   fly to the fight.
+- **Helicopters.** In MC2 a helicopter is a mech that flies (its object file
+  says `MoveType = 1`), and each side has a pair: an Attack Copter (one AC10)
+  and a Heavy Copter (four Streak SRM2s and two pulse lasers). As in MC2 they
+  start on the ground, and take off on MC2's own 4-second animation when sent
+  somewhere or when an enemy comes near, raising dust (spray over water). They fly
+  at about 20 m over land, water and trees alike, see over hills, and set down at a
+  base when they have nothing to do. Their guns face only ahead, so they turn
+  to their target. MC2's rules for them: they can't take a point, artillery and
+  air strikes can't touch them in the air (only on the ground), and shooting one
+  down isn't a mech kill. Their armour is a light mech's, with nothing behind
+  it, and one lost costs 2 tickets. MC2's take-off, landing and crash sounds
+  play; in flight they're silent, as in MC2.
 - **Digging in.** Infantry that stand still for 8 seconds dig in behind
   sandbags (MC2's sandbag bunker) and are much harder to hit until they move:
   mechs take ground fast, infantry are flown in to hold it.
@@ -207,16 +219,20 @@ The AI sends most of its squads at the point it can take next, holds the
 one it must keep with the rest, stands its LRM carriers off behind the attack,
 flies its infantry to far or cut-off points (and its vehicles to cut-off ones),
 and pulls badly hurt squads back to
-reinforce. Its Karnovs set infantry down out of sight of every enemy it has seen
+reinforce. It sends its helicopters with the attack, and lands them at its base
+to refit. Its Karnovs set infantry down out of sight of every enemy it has seen
 in the last minute, and well clear of any point you hold or have units in (the
 HUD shows it those counts, as it shows you); if the landing zone turns hot on
 the way, the Karnov goes somewhere else. Infantry don't go in on a point you hold
 ahead of their mechs and vehicles: they dig in out of sight and wait, then go in
-with them. Played against itself (both sides then fight by its rules), a match
-runs about 9 to 10 minutes; on Easy your side won five of six, by 15 to 64
-tickets, and Liao one by 16 (your pilots are the better: gunnery 45 to 55
-against Liao's 38 to 42). On Normal and Hard, Liao won four of six (three of
-each: too few to tell the two apart). `?scenario=none` shows the mission's
+with them, and so do its helicopters, which would otherwise get there first and
+be shot down. Played against itself (both sides then fight by its rules), a
+match runs about 8 to 10 minutes. Before the helicopters, on Easy your side won
+five of six, by 15 to 64 tickets, and Liao one by 16 (your pilots are the
+better: gunnery 45 to 55 against Liao's 38 to 42); on Normal and Hard, Liao won
+four of six (three of each: too few to tell the two apart). With them, on
+Normal your side won five of six, by 13 to 49 tickets, and Liao one by 20. A
+match can swing by 70 tickets, so a handful of matches shows a trend at best. `?scenario=none` shows the mission's
 own units instead (your lance is then its three mechs plus an Atlas and a
 Madcat), and `?speed=4` runs the world four times as fast (for testing).
 
@@ -249,8 +265,9 @@ profiles. In short:
   the target from and away from where its lancemates are going. The enemy's
   units keep moving round that ring while they fight, as MC2's AI does (a
   calmer step every few seconds), and stop to fight what they meet on their way
-  to a point. A unit whose guns face only ahead (the Centipede, Elementals) holds
-  its spot instead, and turns to keep its target within its 12.5° fire arc. Units keep a few metres apart (a mech or vehicle 8.5 m, MC2's
+  to a point. A unit whose guns face only ahead (the Centipede, Elementals,
+  helicopters) holds its spot instead, and turns to keep its target within its
+  12.5° fire arc. Units keep a few metres apart (a mech or vehicle 8.5 m, MC2's
   movement-map cell), so none stands inside another.
 - Every loaded weapon in its range band (short, medium, long), in sight and
   within 12.5° of where the torso points fires; a mech's torso turns 120° either

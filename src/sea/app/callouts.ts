@@ -173,8 +173,8 @@ export class Callouts {
     const q = unit.squad;
     if (unit.team === PLAYER_TEAM) {
       if (!q) return;
-      // A mech's pilot ejects as it goes down.
-      if (unit.kind === 'mech') this.say(q, 'ejecting');
+      // A mech's pilot ejects as it goes down (a helicopter's goes down with it).
+      if (unit.kind === 'mech' && !unit.flies) this.say(q, 'ejecting');
       if (!q.alive.length) this.notice.show(`${q.name} has been wiped out`, 'alert');
       return;
     }
@@ -183,7 +183,8 @@ export class Callouts {
     const t = this.match.time;
     if (t - (this.lastKill.get(by.squad) ?? -Infinity) < KILL_QUIET_S) return;
     this.lastKill.set(by.squad, t);
-    this.say(by.squad, unit.kind === 'mech' ? 'mechDead' : unit.kind === 'structure' ? 'buildingDead' : 'vehicleDead');
+    // A helicopter isn't a mech kill (code/warrior.cpp).
+    this.say(by.squad, unit.kind === 'mech' && !unit.flies ? 'mechDead' : unit.kind === 'structure' ? 'buildingDead' : 'vehicleDead');
   }
 
   /** An enemy squad seen for the first time in a while: the squad of ours nearest it reports the contact. */

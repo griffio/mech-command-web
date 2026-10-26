@@ -1,6 +1,6 @@
 // MC2's movement map (mclib/move.h MapCell, mclib/move.cpp MoveMap::setUp) and an A* pathfinder over it, for each way
-// of moving: mechs wade the shallows (MC2's own rule), hovercraft cross any water, and ground vehicles and infantry keep
-// to land and fords.
+// of moving: mechs wade the shallows (MC2's own rule), hovercraft cross any water, ground vehicles and infantry keep
+// to land and fords, and helicopters fly over all of it (MC2's move level 2).
 //
 // The map is 3 cells to a terrain tile: 300 x 300 cells of 8.5 m for mc2_01, row 0 at the north edge, laid over the
 // same square as the terrain. World positions are the WebGPU page's metres (x east, z south).
@@ -22,8 +22,8 @@ const DIAGONAL = Math.SQRT2;
 /** Ground vehicles and infantry ford water this deep at most, metres. */
 const FORD_M = 1;
 
-/** How a unit gets about: walking (wading the shallows), hovering over water, or on wheels, tracks or foot. */
-export type MoveClass = 'mech' | 'hover' | 'ground';
+/** How a unit gets about: walking (wading the shallows), hovering over water, on wheels, tracks or foot, or flying. */
+export type MoveClass = 'mech' | 'hover' | 'ground' | 'air';
 
 export class MoveGrid {
   /** Cost to enter each cell for a mech (Infinity: blocked). */
@@ -53,6 +53,7 @@ export class MoveGrid {
       const d = cells[i]!;
       let c: number;
       if (d & OFFMAP) c = BLOCKED;
+      else if (moveClass === 'air') c = CLEAR;
       else if (moveClass === 'hover' && d & (SHALLOW | DEEP)) c = CLEAR;
       // Mechs wade shallow water and are kept out of deep water (MOVEPARAM_WATER_SHALLOW, mclib/move.cpp:4886).
       else if (d & DEEP || !(d & PASSABLE)) c = BLOCKED;

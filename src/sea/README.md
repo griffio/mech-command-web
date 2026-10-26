@@ -93,7 +93,17 @@ pilots' gunnery from `missions/warriors/*.fit`):
   (45° for infantry; gamesys `FireArc`), or with no turret or torso to turn, 10°,
   so its guns bear. A side the AI commands follows these enemy rules, so a match
   the AI plays against itself (a test) is a fair one.
-  Units keep 8.5 m apart (soldiers 3 m), shuffling apart when they crowd.
+  Units keep 8.5 m apart (soldiers 3 m), shuffling apart when they crowd;
+  helicopters in the air keep apart only from one another.
+- Helicopters are mechs that fly (`[MechProfile] MoveType 1`; the converter
+  marks their stats `air`): their own movement class goes anywhere on the map,
+  and their gestures carry the flight (the root rises about 20 m in
+  `parkToStand`; `standToPark` sets it down; the falls crash it), so the unit
+  itself stays on the ground or the sea, as in MC2. Its body's size is measured
+  about the root, not the model's origin. Their torso may turn 120° at 0° a
+  second: they turn to their target. They can't capture (`canCapture`), strikes
+  miss them unless they're parked (`artlry.cpp`), and they start parked
+  (`missiongui.cpp`).
 - Every loaded weapon that is in its range band (short 0-60 m, medium 30-120,
   long 60-180, give or take 12 m), in sight (LRMs may use a teammate's), and
   within 12.5° of where the torso or turret points fires. A mech's torso turns

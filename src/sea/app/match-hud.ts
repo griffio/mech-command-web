@@ -123,7 +123,7 @@ export class MatchHud {
         for (const u of alive) {
           x += u.x / alive.length;
           z += u.z / alive.length;
-          y = Math.max(y, u.instance.center[1] + u.instance.model.radius * 0.7);
+          y = Math.max(y, u.instance.center[1] + u.size * 0.7);
         }
         show = camera.project(x, y + 4, z, this.ndc) && Math.abs(this.ndc[0]) < 1.05 && Math.abs(this.ndc[1]) < 1.05;
         if (show) {

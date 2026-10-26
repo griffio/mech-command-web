@@ -127,6 +127,7 @@ export class Sound {
       ...Object.values(f.voices).flatMap((v) => Object.values(v).flat()),
       ...Object.values(f.weapons ?? {}).flatMap((w) => [w.fire?.file, w.hit?.file]),
       ...Object.values(f.blasts ?? {}).map((c) => c.file),
+      ...Object.values(f.flight ?? {}).map((c) => c.file),
     ].filter((p): p is string => !!p);
     for (const path of new Set(all)) await this.buffer(path);
   }

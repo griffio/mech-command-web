@@ -90,6 +90,8 @@ export interface UnitBody {
   nodes: Map<string, number>;
   /** The GLB it was made from (its wreck is drawn from it too). */
   modelPath: string;
+  /** Its bounding radius, metres: the model's, or a helicopter's body's (see bodyRadius). */
+  size: number;
 }
 
 type V3 = [number, number, number];
@@ -128,6 +130,14 @@ export class SeaUnit {
   pinned = false;
   /** A job it's part-way through (a truck building a forward base), shown over it: the share done, and what it is. */
   job: { share: number; label: string } | null = null;
+  /**
+   * A helicopter's flight: on the ground (MC2 starts them landed), lifting off, in the air, or setting down (MC2's park
+   * gestures). It moves and fires only in the air; on the ground it takes off when it has somewhere to go or something
+   * to fight.
+   */
+  flight: 'parked' | 'takingOff' | 'flying' | 'landing' = 'flying';
+  /** Its bounding radius, metres (see UnitBody). */
+  readonly size: number;
   /** A soldier's body is gone when he dies (there's no wreck to leave). */
   private gone = false;
   instance: ModelInstance;
@@ -141,6 +151,7 @@ export class SeaUnit {
   private readonly scale: number;
   private readonly nodes: Map<string, number>;
   private readonly torsoNode: number;
+  private readonly rootNode: number;
 
   constructor(
     readonly name: string,
@@ -161,7 +172,9 @@ export class SeaUnit {
     this.scale = body.scale;
     this.nodes = body.nodes;
     this.modelPath = body.modelPath;
+    this.size = body.size;
     this.torsoNode = body.nodes.get('joint_torso') ?? -1;
+    this.rootNode = body.nodes.get('joint_root') ?? -1;
   }
 
   get alive(): boolean {
@@ -173,11 +186,24 @@ export class SeaUnit {
     return this.team === PLAYER_TEAM && this.combat !== null && this.alive && this.kind !== 'structure';
   }
 
-  /** How it gets about: a mech wades the shallows, a hovercraft crosses water, the rest keep to land and fords. */
+  /**
+   * How it gets about: a mech wades the shallows, a helicopter (a mech that flies) goes anywhere, a hovercraft crosses
+   * water, the rest keep to land and fords.
+   */
   get moveClass(): MoveClass {
-    if (this.kind === 'mech') return 'mech';
     const stats = this.combat?.stats;
+    if (this.kind === 'mech') return stats && 'air' in stats && stats.air ? 'air' : 'mech';
     return stats && 'hover' in stats && stats.hover ? 'hover' : 'ground';
+  }
+
+  /** A helicopter. */
+  get flies(): boolean {
+    return this.moveClass === 'air';
+  }
+
+  /** A helicopter on the ground, or on its way up or down: it neither moves nor fires. */
+  get grounded(): boolean {
+    return this.flight !== 'flying' && this.flies;
   }
 
   /** Where its weapons point: the torso's facing on a mech, the turret's on a vehicle (MC2 degrees). */
@@ -189,7 +215,9 @@ export class SeaUnit {
   get twistLimit(): number {
     const stats = this.combat?.stats;
     if (!stats) return 0;
-    return 'torsoYaw' in stats ? stats.torsoYaw : stats.turretYaw;
+    // A helicopter's torso may turn 120 degrees (MaxTorsoYaw), at 0 degrees a second (TorsoYawRate): it never does.
+    if ('torsoYaw' in stats) return stats.torsoYawRate > 0 ? stats.torsoYaw : 0;
+    return stats.turretYaw;
   }
 
   private get twistRate(): number {
@@ -208,7 +236,7 @@ export class SeaUnit {
 
   /** Height its pilot sees from, metres above the sea. */
   get eyeY(): number {
-    return this.instance.center[1] + this.instance.model.radius * 0.25;
+    return this.instance.center[1] + this.size * 0.25;
   }
 
   get clipName(): string {
@@ -221,12 +249,27 @@ export class SeaUnit {
 
   /** Footprint radius, metres (for the selection ring and picking). */
   get radius(): number {
-    return this.instance.model.radius * 0.55;
+    return this.size * 0.55;
   }
 
   /** Play a clip, looping unless `once` (then it holds its last frame: see clipDone). */
   play(name: string, fade = 0.2, once = false): void {
+    // A helicopter on the ground, or on its way up or down, plays that.
+    if (this.grounded) return;
     this.animator?.play(name, fade, 0, !once);
+  }
+
+  /** Set a helicopter down where it is, unless it's going somewhere (it takes off again when it is). */
+  land(): void {
+    if (this.flight !== 'flying' || !this.flies || this.route.length) return;
+    this.flight = 'landing';
+    this.animator?.play('standToPark', 0.3, 0, false);
+  }
+
+  /** Put a helicopter on the ground, as MC2 starts them. */
+  park(): void {
+    this.flight = 'parked';
+    this.animator?.play('standToPark', 0, Infinity, false);
   }
 
   /** A clip played once has reached its end. */
@@ -252,6 +295,8 @@ export class SeaUnit {
     this.attackOrder = null;
     this.engaging = false;
     if (this.kind === 'infantry') this.gone = true;
+    // A helicopter on the ground (or on its way up or down) is wrecked where it stands; one in the air falls out of it.
+    else if (this.grounded) this.animator?.play('standToPark', 0.3, Infinity, false);
     // The models' destroyed gestures carry no keys; the falls they match frame for frame do.
     else this.animator?.play(fromFront ? 'fallBackward' : 'fallForward', 0.15, 0, false);
   }
@@ -273,24 +318,43 @@ export class SeaUnit {
   /** `move` false keeps the unit where it is (still animating): the perf survey wants the same picture throughout. */
   update(dt: number, terrain: Terrain, move = true): void {
     if (move && this.alive && !this.embarked) {
-      // Pinned soldiers stay down, and go on where they were going once the fire slackens.
-      if (this.route.length && !this.pinned) this.steer(dt);
-      else if (this.target) this.faceTarget(dt);
+      if (this.flies) this.lift();
+      // Pinned soldiers stay down, and go on where they were going once the fire slackens. A helicopter on the ground
+      // (or on its way up or down) waits.
+      if (!this.grounded) {
+        if (this.route.length && !this.pinned) this.steer(dt);
+        else if (this.target) this.faceTarget(dt);
+      }
       if (this.pinned) this.play('idle');
       this.aim(dt);
     }
     this.animator?.update(dt);
     this.instance.visible = !this.hidden && !this.gone && !this.embarked;
-    // Mechs, infantry and tracks wade; hovercraft (and anything flying) go over the water.
+    // Mechs, infantry and tracks wade; hovercraft and anything flying go over the water.
     const ground = terrain.heightAt(this.x, this.z);
-    const y = (this.moveClass === 'hover' || this.altitude > 0 ? Math.max(ground, 0) : ground) + this.altitude;
+    const y = (this.moveClass === 'hover' || this.flies || this.altitude > 0 ? Math.max(ground, 0) : ground) + this.altitude;
     placement(this.frame, this.x, y, this.z, (this.rotation * Math.PI) / 180, this.scale);
     const nodes = this.animator?.matrices ?? this.rest;
     const out = this.instance.matrices;
     for (let k = 0; k < this.instance.model.nodeCount; k++) mulAffine(out, k * AFFINE_FLOATS, this.frame, 0, nodes, k * AFFINE_FLOATS);
     this.instance.center[0] = this.x;
-    this.instance.center[1] = y + this.instance.model.radius * 0.5;
+    // A helicopter's body is wherever its gestures have lifted its root to.
+    this.instance.center[1] = this.flies && this.rootNode >= 0 ? out[this.rootNode * AFFINE_FLOATS + 7]! : y + this.size * 0.5;
     this.instance.center[2] = this.z;
+  }
+
+  /**
+   * A helicopter on the ground takes off when it has somewhere to go or something to fight; taking off and landing end
+   * with their gestures.
+   */
+  private lift(): void {
+    if (this.flight === 'parked' && (this.route.length || this.target?.alive)) {
+      this.flight = 'takingOff';
+      this.animator?.play('parkToStand', 0.2, 0, false);
+    } else if ((this.flight === 'takingOff' || this.flight === 'landing') && this.clipDone) {
+      this.flight = this.flight === 'takingOff' ? 'flying' : 'parked';
+      if (this.flight === 'flying') this.animator?.play('idle', 0.2);
+    }
   }
 
   /** Standing, turn the hull toward the target (see PIVOT_ARC); a turret keeps its footing and turns its gun. */
@@ -426,7 +490,7 @@ export class World {
       new MoveGrid(new Uint32Array(cells!), move!.width, move!.height, extent / move!.width, [-extent / 2, -extent / 2], moveClass, (x, z) =>
         terrain.depthAt(x, z),
       );
-    const grids = cells && move ? { mech: grid('mech'), hover: grid('hover'), ground: grid('ground') } : null;
+    const grids = cells && move ? { mech: grid('mech'), hover: grid('hover'), ground: grid('ground'), air: grid('air') } : null;
     const world = new World(sea, terrain, info, unitsFile, combatFile, grids);
     world.battle = new Battle(world, sea.fx);
     progress('Loading buildings and trees…');
@@ -529,19 +593,24 @@ export class World {
       this.unitModels.set(cacheKey, model);
     }
     const animator = data.clips.size ? new Animator(data) : null;
+    const rest = restPose(data);
+    const gpuModel = await model;
+    const flies = o.kind === 'mech' && !!(o.stats && this.combatFile.mechs[o.stats]?.air);
     const body: UnitBody = {
-      instance: this.sea.models.addInstance(await model),
+      instance: this.sea.models.addInstance(gpuModel),
       animator,
-      rest: restPose(data),
+      rest,
       info: o.info,
       scale,
       nodes: new Map(data.nodes.map((n, i) => [n.name, i])),
       modelPath: o.model,
+      size: flies ? bodyRadius(data, rest) * scale : gpuModel.radius,
     };
     const gunnery = o.gunnery + (this.gunneryBonus.get(o.team) ?? 0);
     const combat = o.custom ? new VehicleCombat(o.custom, this.combatFile.weapons, gunnery) : this.combatant(o.kind, o.stats, gunnery);
     const unit = new SeaUnit(o.name, o.kind, o.team, body, combat, o.x, o.z, o.rotation);
-    if (animator) {
+    if (flies) unit.park();
+    else if (animator) {
       animator.play('idle', 0, Math.random() * 3); // out of step, so a lance does not breathe in unison
     }
     unit.update(0, this.terrain);
@@ -903,16 +972,18 @@ export class World {
 
   /**
    * Units standing inside one another's room (PERSONAL_M) shuffle apart, never onto ground they can't stand on; a
-   * structure doesn't move. One walking to a spot another stands on stops beside it instead.
+   * structure doesn't move. One walking to a spot another stands on stops beside it instead. Helicopters in the air keep
+   * apart only from one another, a rotor's breadth (their size).
    */
   private spaceOut(dt: number): void {
     const units = this.units.filter((u) => u.alive && u.combat && !u.embarked && u.altitude === 0);
-    const room = (u: SeaUnit) => (u.kind === 'structure' ? u.radius : PERSONAL_M[u.kind]);
-    const gives = (u: SeaUnit) => (u.kind === 'structure' ? 0 : u.route.length && !u.pinned ? MOVING_GIVES : 1);
+    const room = (u: SeaUnit) => (u.kind === 'structure' ? u.radius : u.flies ? u.size * 0.5 : PERSONAL_M[u.kind]);
+    const gives = (u: SeaUnit) => (u.kind === 'structure' || (u.flies && u.grounded) ? 0 : u.route.length && !u.pinned ? MOVING_GIVES : 1);
     for (let i = 0; i < units.length; i++) {
       const a = units[i]!;
       for (let j = i + 1; j < units.length; j++) {
         const b = units[j]!;
+        if (a.flies !== b.flies) continue;
         const need = room(a) + room(b);
         const dx = b.x - a.x;
         const dz = b.z - a.z;
@@ -959,7 +1030,7 @@ export class World {
       const t = (c[0] - o[0]) * d[0] + (c[1] - o[1]) * d[1] + (c[2] - o[2]) * d[2];
       if (t <= 0 || t >= bestT) continue;
       const miss = Math.hypot(o[0] + d[0] * t - c[0], o[1] + d[1] * t - c[1], o[2] + d[2] * t - c[2]);
-      if (miss < Math.max(u.instance.model.radius * 0.6, t * metresPerPixel * slopPx)) {
+      if (miss < Math.max(u.size * 0.6, t * metresPerPixel * slopPx)) {
         best = u;
         bestT = t;
       }
@@ -992,7 +1063,8 @@ export class World {
   /** How units of a scenario type get about. */
   typeMoveClass(type: string): MoveClass {
     const t = this.unitsFile.types?.[type];
-    if (!t || t.kind === 'mech') return 'mech';
+    if (!t) return 'mech';
+    if (t.kind === 'mech') return t.stats && this.combatFile.mechs[t.stats]?.air ? 'air' : 'mech';
     return t.stats && this.combatFile.vehicles[t.stats]?.hover ? 'hover' : 'ground';
   }
 
@@ -1066,6 +1138,28 @@ export class World {
     }
     return entry;
   }
+}
+
+/**
+ * A helicopter's bounding radius about its root, in the model's units, as the renderer measures a model about its origin
+ * (with its margin for gestures): a helicopter's gestures lift the root to its flying height, which the model's own
+ * radius takes in.
+ */
+function bodyRadius(data: ModelData, rest: Float32Array): number {
+  const root = Math.max(data.nodes.findIndex((n) => n.name === 'joint_root'), 0) * AFFINE_FLOATS;
+  const [rx, ry, rz] = [rest[root + 3]!, rest[root + 7]!, rest[root + 11]!];
+  let radius = 0;
+  for (const p of data.primitives) {
+    const m = rest.subarray(p.node * AFFINE_FLOATS, p.node * AFFINE_FLOATS + AFFINE_FLOATS);
+    for (let k = 0; k < p.positions.length; k += 3) {
+      const [x, y, z] = [p.positions[k]!, p.positions[k + 1]!, p.positions[k + 2]!];
+      radius = Math.max(
+        radius,
+        Math.hypot(m[0]! * x + m[1]! * y + m[2]! * z + m[3]! - rx, m[4]! * x + m[5]! * y + m[6]! * z + m[7]! - ry, m[8]! * x + m[9]! * y + m[10]! * z + m[11]! - rz),
+      );
+    }
+  }
+  return radius * 1.3;
 }
 
 /** Degrees wrapped to -180..180. */

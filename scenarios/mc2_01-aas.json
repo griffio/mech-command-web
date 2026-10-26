@@ -112,6 +112,16 @@
           ],
           "gunnery": 30,
           "voice": "pilot1"
+        },
+        {
+          "name": "Foxtrot",
+          "role": "Air cavalry",
+          "units": [
+            "mediumcopter",
+            "heavycopter"
+          ],
+          "gunnery": 50,
+          "voice": "pilot9"
         }
       ]
     },
@@ -201,6 +211,15 @@
             "repairtruck"
           ],
           "gunnery": 30
+        },
+        {
+          "name": "Phoenix",
+          "role": "Air wing",
+          "units": [
+            "mediumcopter",
+            "heavycopter"
+          ],
+          "gunnery": 42
         }
       ]
     }

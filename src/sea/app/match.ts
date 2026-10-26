@@ -66,8 +66,7 @@ const CLEAR_WRECK_S = 150;
 /**
  * How much better the AI's pilots shoot than the scenario has them, by the player's choice: gunnery points, which are the
  * chance to hit itself. Easy is the scenario as written, where the player's pilots are the better (45 to 55 against 38
- * to 42). A new player starts on Normal, about an even fight (the AI against itself: Liao won 1 of 6 on Easy, 4 of 6 on
- * Normal and Hard).
+ * to 42). A new player starts on Normal (see the README for how matches the AI plays against itself have gone).
  */
 export const DIFFICULTY = { easy: 0, normal: 5, hard: 10 } as const;
 export type Difficulty = keyof typeof DIFFICULTY;
@@ -254,10 +253,11 @@ export class Match {
     this.onSignal({ kind: 'destroyed', unit: u, by });
   }
 
+  /** Units in a point's circle take it; helicopters can't (code/warrior.cpp: canCapture). */
   private capture(dt: number): void {
     const counts = this.points.map(() => [0, 0] as [number, number]);
     for (const u of this.world.units) {
-      if (!u.alive || !u.combat || u.embarked || u.pinned || (u.team !== 0 && u.team !== 1)) continue;
+      if (!u.alive || !u.combat || u.embarked || u.pinned || u.flies || (u.team !== 0 && u.team !== 1)) continue;
       this.points.forEach((p, i) => {
         if (Math.hypot(u.x - p.x, u.z - p.z) <= p.radius) counts[i]![u.team]!++;
       });
@@ -349,6 +349,8 @@ export class Match {
         }
         const point = this.logistics?.pointFor(side.team, alive) ?? (alive.every((u) => Math.hypot(u.x - side.base.x, u.z - side.base.z) <= BASE_RADIUS) ? this.mainBase(side) : null);
         if (!point || alive.some((u) => u.embarked)) return;
+        // Helicopters with nothing to do set down at a base (and take off again when they have).
+        for (const u of alive) if (!u.target && !u.attackOrder) u.land();
         if (!point.fob || this.logistics!.pay(point, this.logistics!.refitCost(alive) * dt)) for (const u of alive) u.combat?.refit(dt, REFIT_RATE);
         else this.logistics!.short(point.fob, squad, 'refit');
         if (squad.missing > 0 && this.time >= squad.reinforceAt && this.spawning === 0) {
@@ -487,14 +489,15 @@ function clearance(at: [number, number], threats: Threat[]): number {
 }
 
 /**
- * What losing a unit costs its side: a mech by its weight, power armour two, a soldier or a vehicle one. MC2's vehicles
- * go down to a hit or two (7 points a side, against a mech's hundreds), like soldiers; at more, a side with armour bleeds
- * tickets for it.
+ * What losing a unit costs its side: a mech by its weight, a helicopter or power armour two, a soldier or a vehicle one.
+ * MC2's vehicles go down to a hit or two (7 points a side, against a mech's hundreds), like soldiers; at more, a side
+ * with armour bleeds tickets for it. A helicopter has a light mech's armour but no structure behind it.
  */
 function ticketCost(u: SeaUnit): number {
   const stats = u.combat?.stats;
   // A forward base's loss is charged when its tent falls (logistics.ts); a turret costs nothing.
   if (u.kind === 'structure') return 0;
+  if (u.flies) return 2;
   if (u.kind === 'mech') return Math.max(4, Math.round((stats?.tonnage ?? 40) / 10));
   if (u.kind === 'infantry') return (stats?.tonnage ?? 1) > 2 ? 2 : 1;
   return 1;
@@ -504,7 +507,8 @@ function ticketCost(u: SeaUnit): number {
  * A simple commander for a side: most squads go for the point it can take next, the rest hold the point it must keep,
  * fire-support squads stand off behind the attack, and squads that have lost most of their strength fall back to
  * the base to reinforce and refit. Infantry are flown in short of the enemy, out of its sight, and go in on a point the
- * enemy is at with the mechs and vehicles, not ahead of them.
+ * enemy is at with the mechs and vehicles, not ahead of them; so do its helicopters, which would otherwise get there
+ * first.
  */
 export class CommanderAI {
   private nextThink = 0;
@@ -594,7 +598,8 @@ export class CommanderAI {
       if (!stats || S.readyIn(this.team, call) > 0) continue;
       const seen = [...this.world.battle.seenBy(this.team)].filter((u) => u.alive && !u.embarked);
       const own = this.world.units.filter((u) => u.team === this.team && u.alive && u.combat && !u.embarked);
-      const worth = (u: SeaUnit) => (u.kind === 'mech' ? 3 : u.kind === 'infantry' ? 1 : 2);
+      // Helicopters in the air are out of a strike's reach.
+      const worth = (u: SeaUnit) => (u.flies && u.flight !== 'parked' ? 0 : u.kind === 'mech' ? 3 : u.kind === 'infantry' ? 1 : 2);
       let best: SeaUnit | null = null;
       let bestScore = STRIKE_WORTH[call];
       for (const c of seen) {
@@ -621,15 +626,15 @@ export class CommanderAI {
   }
 
   /**
-   * Infantry don't go in on a point the enemy holds, is in, or has been seen near, ahead of their side's mechs and
-   * vehicles: they wait out of the enemy's sight (and dig in) until a squad of those attacking it is nearly as near it as
-   * they are, then go in with it. True if the squad waits (or goes to wait somewhere).
+   * Infantry and helicopters don't go in on a point the enemy holds, is in, or has been seen near, ahead of their side's
+   * mechs and vehicles: they wait out of the enemy's sight (infantry dig in) until a squad of those attacking it is
+   * nearly as near it as they are, then go in with it. True if the squad waits (or goes to wait somewhere).
    */
   private waitForArmour(squad: Squad, index: number, threats: Threat[]): boolean {
     const p = this.match.points[index]!;
     const c = squad.centroid();
-    if (!squad.isInfantry || !c || clearance([p.x, p.z], threats) >= 0) return false;
-    const armour = this.match.side(this.team).squads.filter((q) => !q.isInfantry && !q.isLogistics);
+    if (!(squad.isInfantry || squad.isAir) || !c || clearance([p.x, p.z], threats) >= 0) return false;
+    const armour = this.match.side(this.team).squads.filter((q) => !q.isInfantry && !q.isLogistics && !q.isAir);
     if (!armour.length) return false;
     const toPoint = (q: Squad) => {
       const at = q.centroid();

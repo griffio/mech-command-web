@@ -50,6 +50,8 @@ export interface MechStats {
   /** How far the torso turns either way from the legs, degrees, and how fast, degrees a second. */
   torsoYaw: number;
   torsoYawRate: number;
+  /** It flies: MC2's helicopters are mechs that fly (see airMechs). */
+  air: boolean;
   armor: Record<ArmorLocation, number>;
   structure: Record<MechLocation, number>;
   weapons: { id: number; location: MechLocation }[];
@@ -132,7 +134,7 @@ export class ComponentTable {
 }
 
 /** Variant 0 of a mech's stats file. */
-export function readMechStats(csv: string, components: ComponentTable): MechStats {
+export function readMechStats(csv: string, components: ComponentTable, air = false): MechStats {
   const rows = parseCsv(csv);
   const cell = (r: number, c: number) => (rows[r - 1]?.[c - 1] ?? '').trim();
   const v = 0;
@@ -198,12 +200,28 @@ export function readMechStats(csv: string, components: ComponentTable): MechStat
     runSpeed: num(cell(7, 5)),
     torsoYaw: num(cell(9, 5)),
     torsoYawRate: num(cell(8, 5)),
+    air,
     armor,
     structure,
     weapons,
     ammo,
     slots,
   };
+}
+
+/**
+ * The mechs that fly, by appearance (which their stats file shares: mediumcopter.csv for AttackCopter.fit's
+ * MediumCopter): MC2's helicopters are mechs whose object file has [MechProfile] MoveType 1 (code/mover.h MOVETYPE_AIR).
+ */
+export function airMechs(src: SourceData): Set<string> {
+  const air = new Set<string>();
+  for (const name of src.objectList()) {
+    const rel = name.toLowerCase().endsWith('.fit') ? src.actual(`objects/${name}`) : null;
+    if (!rel) continue;
+    const fit = src.fit(rel);
+    if (fit.num('MechProfile', 'MoveType') === 1) air.add(fit.str('ObjectType', 'AppearanceName').toLowerCase());
+  }
+  return air;
 }
 
 /** A ground vehicle's object file. */
