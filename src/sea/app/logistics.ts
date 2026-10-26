@@ -1,6 +1,6 @@
 // Logistics, after Squad: supply trucks (MC2's repair truck, its 500 refit points carried as supply) build forward bases
 // where the fight is and keep them supplied. A forward base is MC2's HQ tent behind sandbags, guarded by an autocannon
-// turret. A side's wiped-out squads come back at the one nearest the front, squads there reinforce and refit (paid for in
+// turret, with a sensor tower behind it (sensors.ts). A side's wiped-out squads come back at the one nearest the front, squads there reinforce and refit (paid for in
 // supply), and the Karnov flies from it. Destroy the tent and the base is gone. The main base works the same way, free.
 //
 // Trucks need no orders but where to go: one standing at the main base fills up, one standing at a forward base unloads
@@ -11,6 +11,7 @@ import type { PaintScheme } from '../../paint.ts';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import type { Squad } from './squads';
 import type { Match } from './match';
+import { TOWER_STRUCTURE } from './sensors';
 import { bearing, PLAYER_TEAM, type SeaUnit, type World } from './world';
 
 /** Squads within this of a forward base reinforce and refit there, metres. */
@@ -67,6 +68,7 @@ export class Logistics {
   private readonly builds = new Map<Squad, Build>();
   private wallModel: GpuModel | null = null;
   private hqPath: string | null = null;
+  private towerPath: string | null = null;
   private readonly rings = new Map<Fob, ModelInstance>();
   /** Rings shown while the player picks a spot: where a forward base can't go. */
   private noBuild: ModelInstance[] = [];
@@ -84,6 +86,8 @@ export class Logistics {
     this.wallModel = await this.world.propModel(this.spec.wall);
     this.hqPath = this.world.propPath(this.spec.hq);
     if (this.hqPath) await this.world.prepareWreck(this.hqPath);
+    this.towerPath = this.spec.tower ? this.world.propPath(this.spec.tower) : null;
+    if (this.towerPath) await this.world.prepareWreck(this.towerPath);
   }
 
   /** Supply it costs to bring back a unit of a type at a forward base (a mech by its weight). */
@@ -311,7 +315,7 @@ export class Logistics {
     }
   }
 
-  /** Put up a forward base: the tent, sandbags either side, the turret in front, and its ring. */
+  /** Put up a forward base: the tent, its sensor tower behind, sandbags either side, the turret in front, and its ring. */
   private async raise(team: number, x: number, z: number, paint: PaintScheme): Promise<void> {
     if (!this.hqPath) return;
     // It faces the enemy's base.
@@ -330,9 +334,28 @@ export class Logistics {
       paint,
       stats: null,
       gunnery: 0,
-      custom: tentStats(),
+      custom: structureStats('Forward base', HQ_STRUCTURE),
     });
     this.world.units.push(hq);
+    if (this.towerPath) {
+      const [sx, sz] = this.world.openNear(x - Math.sin(r) * 16, z - Math.cos(r) * 16, 'ground');
+      const tower = await this.world.spawn({
+        model: this.towerPath,
+        info: null,
+        kind: 'structure',
+        name: 'Sensor tower',
+        team,
+        x: sx,
+        z: sz,
+        rotation: facing,
+        paint,
+        stats: null,
+        gunnery: 0,
+        custom: structureStats('Sensor tower', TOWER_STRUCTURE),
+      });
+      this.world.units.push(tower);
+      this.match.sensors.addTower(tower);
+    }
     const [tx, tz] = this.world.openNear(x + Math.sin(r) * 18, z + Math.cos(r) * 18, 'ground');
     const turret = await this.world.spawnType(this.spec.turret, team, tx, tz, facing, 50, paint);
     if (turret) this.world.units.push(turret);
@@ -352,11 +375,11 @@ export class Logistics {
   }
 }
 
-/** The tent's stats: structure on every side and no armour, no weapons. */
-function tentStats(): VehicleStats {
-  const sides = { front: HQ_STRUCTURE, left: HQ_STRUCTURE, right: HQ_STRUCTURE, rear: HQ_STRUCTURE, turret: HQ_STRUCTURE };
+/** A building's stats (the tent, the sensor tower): structure on every side and no armour, no weapons. */
+function structureStats(name: string, structure: number): VehicleStats {
+  const sides = { front: structure, left: structure, right: structure, rear: structure, turret: structure };
   return {
-    name: 'Forward base',
+    name,
     tonnage: 10,
     speed: 0,
     hover: false,

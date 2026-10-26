@@ -59,9 +59,9 @@ export interface Scenario {
   support?: ScenarioSupport;
 }
 
-/** A strike a side calls in on a spot, then waits for again. */
+/** A strike (or a sensor probe) a side calls in on a spot, then waits for again. */
 export interface ScenarioStrike {
-  /** MC2's strike (objects/<strike>.fit: its damage, reach and time to arrive): "artsml", "artbig". */
+  /** MC2's strike (objects/<strike>.fit: its damage, reach and time to arrive): "artsml", "artbig"; "artsns" probes. */
   strike: string;
   /** Seconds into the match before the first, and between one and the next. */
   first: number;
@@ -75,6 +75,8 @@ export interface ScenarioSupport {
   marker: string;
   artillery?: ScenarioStrike;
   airstrike?: ScenarioStrike;
+  /** A sensor probe: it picks up the enemy about the spot for a while (MC2's sensor strike). */
+  sensor?: ScenarioStrike;
 }
 
 /** Supply trucks and the forward bases they build (all object file names). */
@@ -87,6 +89,8 @@ export interface ScenarioLogistics {
   turret: string;
   /** Sandbags about the base. */
   wall: string;
+  /** The sensor tower that watches about a forward base. */
+  tower?: string;
   /** Supply a forward base costs to build. */
   fobCost: number;
 }
@@ -118,7 +122,7 @@ export function scenarioNeeds(scenarios: Scenario[]): {
     if (s.transport) appearances.add(s.transport.toLowerCase());
     if (s.support) {
       appearances.add(s.support.marker.toLowerCase());
-      for (const call of [s.support.artillery, s.support.airstrike]) {
+      for (const call of [s.support.artillery, s.support.airstrike, s.support.sensor]) {
         if (!call) continue;
         strikes.add(call.strike.toLowerCase());
         if (call.bomber) appearances.add(call.bomber.toLowerCase());
@@ -130,6 +134,7 @@ export function scenarioNeeds(scenarios: Scenario[]): {
       units.add(s.logistics.turret.toLowerCase());
       props.add(s.logistics.hq.toLowerCase());
       props.add(s.logistics.wall.toLowerCase());
+      if (s.logistics.tower) props.add(s.logistics.tower.toLowerCase());
     }
     for (const side of s.sides) {
       props.add(side.flag.toLowerCase());

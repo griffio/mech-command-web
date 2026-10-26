@@ -1,6 +1,7 @@
 // The match's HUD: both sides' tickets and the lane of capture points along the top (a tap on a point looks at it),
-// a card per squad of the player's along the bottom (a tap selects it, a second tap looks at it, shift adds), and each
-// squad's letter floating over it in the world (the enemy's only while the player's side can see one of them).
+// a card per squad of the player's along the bottom (a tap selects it, a second tap looks at it, shift adds), each
+// squad's letter floating over it in the world (the enemy's only while the player's side can see one of them), and a
+// red blip on each enemy the player's sensors pick up out of sight (sensors.ts).
 import type { Camera } from '../render/camera';
 import { TEAM_COLOR, type Match } from './match';
 import type { Squad } from './squads';
@@ -13,6 +14,7 @@ export class MatchHud {
   private readonly points: { el: HTMLButtonElement; fill: HTMLElement; tag: HTMLElement }[] = [];
   private readonly cards = new Map<Squad, { el: HTMLButtonElement; bar: HTMLElement; status: HTMLElement; count: HTMLElement }>();
   private readonly markers = new Map<Squad, { el: HTMLDivElement; shown: boolean }>();
+  private readonly blips: HTMLDivElement[] = [];
   private readonly ownTickets: HTMLElement;
   private readonly enemyTickets: HTMLElement;
   private readonly ndc: [number, number] = [0, 0];
@@ -23,7 +25,7 @@ export class MatchHud {
     private readonly match: Match,
     bar: HTMLElement,
     squads: HTMLElement,
-    overlay: HTMLElement,
+    private readonly overlay: HTMLElement,
     private readonly lookAt: (x: number, z: number) => void,
   ) {
     bar.hidden = false;
@@ -81,6 +83,7 @@ export class MatchHud {
 
   update(camera: Camera, width: number, height: number): void {
     this.placeMarkers(camera, width, height);
+    this.placeBlips(camera, width, height);
     if (this.match.time < this.nextRefresh) return;
     this.nextRefresh = this.match.time + REFRESH_S;
     const own = this.match.side(PLAYER_TEAM);
@@ -108,6 +111,28 @@ export class MatchHud {
       card.count.textContent = `${squad.riders.length}/${squad.spec.units.length}`;
       card.status.textContent = squad.status(this.match.time);
     }
+  }
+
+  /** A blip on each enemy the player's sensors pick up and nobody of theirs sees: where it is, not what. */
+  private placeBlips(camera: Camera, width: number, height: number): void {
+    const seen = this.world.battle.seenBy(PLAYER_TEAM);
+    let n = 0;
+    for (const u of this.match.sensors.sensed(PLAYER_TEAM)) {
+      if (!u.alive || seen.has(u)) continue;
+      const y = Math.max(this.world.terrain.heightAt(u.x, u.z), 0) + 2;
+      if (!camera.project(u.x, y, u.z, this.ndc) || Math.abs(this.ndc[0]) > 1.05 || Math.abs(this.ndc[1]) > 1.05) continue;
+      let el = this.blips[n];
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'blip';
+        this.overlay.prepend(el);
+        this.blips.push(el);
+      }
+      el.style.transform = `translate(${(((this.ndc[0] + 1) / 2) * width).toFixed(1)}px, ${(((1 - this.ndc[1]) / 2) * height).toFixed(1)}px)`;
+      if (el.hidden) el.hidden = false;
+      n++;
+    }
+    for (let i = n; i < this.blips.length; i++) if (!this.blips[i]!.hidden) this.blips[i]!.hidden = true;
   }
 
   /** Each squad's letter over its middle; the enemy's only while the player's side sees one of its members. */

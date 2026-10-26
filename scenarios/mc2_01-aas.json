@@ -17,6 +17,11 @@
       "bomber": "slayer",
       "first": 150,
       "cooldown": 240
+    },
+    "sensor": {
+      "strike": "artsns",
+      "first": 45,
+      "cooldown": 180
     }
   },
   "points": [
@@ -231,6 +236,7 @@
     "hq": "hqtent",
     "turret": "mediumautocannonturret",
     "wall": "sandbagwall",
+    "tower": "liaosensortower",
     "fobCost": 300
   }
 }

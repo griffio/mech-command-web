@@ -91,8 +91,9 @@ it. A second tap on a selected squad's card looks at it, and a tap on a point in
 the top bar looks at the point. **Stop** halts them (and drops an attack order)
 and **Run** makes mechs run. **Airlift** and **Build FOB** appear when the
 selection has infantry or a supply truck: press one, then tap the ground.
-**Artillery** and **Air strike** call in a strike: press one, then tap where it
-should land (they show how long until they're ready again).
+**Artillery** and **Air strike** call in a strike, and **Sensor probe** drops a
+probe: press one, then tap where it should land (they show how long until
+they're ready again).
 **Easy**, **Normal** or **Hard** (top right) is the difficulty: how well the
 enemy's pilots shoot. Easy is the scenario as written, where yours are the
 better pilots; Normal and Hard make the enemy's 5 and 10 points likelier to hit
@@ -123,7 +124,8 @@ simple AI commander.
   standing at its base gets missing members back one at a time, and its
   armour, structure and ammunition refitted.
 - **Fog of war.** You see only the enemies your units see (225 m, the ground
-  blocks the view); their squad letters show while they're seen.
+  blocks the view); their squad letters show while they're seen. Your sensors
+  pick up more, as red blips (see Sensors).
 - **Infantry** are MC2's own soldiers and Elementals, drawn 1.8 times life size
   so they can be found among mechs. They're harder to hit than in MC2 (half as
   often, Elementals 70%, and less again in woods), and as cheap as tickets go.
@@ -185,7 +187,8 @@ simple AI commander.
 - **Artillery and air strikes.** Each side can call in MC2's strikes
   (`objects/artsml.fit`, `artbig.fit`): artillery, ready every 2 minutes, and an
   air strike, every 4, flown by MC2's Slayer aerospace fighter on its own
-  bombing-run animation. Press one and tap a spot one of your squads can see.
+  bombing-run animation. Press one and tap a spot one of your squads can see,
+  or your sensors reach.
   MC2's marker spins there and a ring shows the strike's reach; 7 seconds later
   it lands, as MC2's do, and every unit within 80 m takes MC2's hits (within
   25 m, more of them): artillery 8 damage a hit, the air strike 15. It hits your
@@ -195,12 +198,28 @@ simple AI commander.
   a warning and the alarm, and the squad in the way calls it in: run. The AI
   calls its strikes on your units bunched up (a mech counts most), never where
   its own would be hit.
+- **Sensors.** As in MC2 (`code/contact.cpp`), a side also picks up the enemy
+  beyond sight, through hills, within its sensors' reach. Those none of your
+  units see show as red blips: where something is, not what. Nothing can fire
+  at a blip, but artillery and air strikes can be called on one. The sensors are
+  MC2's own: the Raven's Advanced sensors reach 550 m and the Werewolf's
+  Extended 400 m (other mechs' standard sensors add nothing to sight, and a
+  critical hit to the head can knock them out); every forward base raises MC2's
+  sensor tower, which watches 550 m about it and falls to 11 points of damage;
+  and **Sensor probe** drops MC2's probe on any spot, ready 45 seconds in and
+  then every 3 minutes. A probe picks up everything within 800 m, a reach that
+  shrinks steadily to nothing over 2 minutes (its ring shows it). The Raven's
+  ECM keeps it off the enemy's sensors. Betty says when a probe is ready, when
+  your tower picks the enemy up after a quiet minute, and when it's destroyed,
+  in MC2's lines for those (the engine has the tower lines but never plays them).
+  None of the Liao garrison's mechs carry sensors: it has its towers and probes.
 - **Forward bases.** Each side has a logistics squad: MC2's repair truck,
   carrying its 500 refit points as supply. Select it, press **Build FOB** and
   tap a spot (red rings show where it can't go: within 300 m of your main base
   and other forward bases, or 250 m of the enemy's): it drives there, a ring
   marking the spot, and spends 15 seconds and 300 supply raising MC2's HQ tent
-  behind sandbags, guarded by an autocannon turret (two AC10s, its own gunner).
+  behind sandbags, guarded by an autocannon turret (two AC10s, its own gunner)
+  and watched over by a sensor tower.
   A countdown shows over the truck, and another order calls the build off. Wiped-out
   squads come back at the one nearest the front, squads there reinforce and
   refit, and the Karnov flies from it; all of that costs its supply (a mech its
@@ -238,7 +257,9 @@ flies its infantry to far or cut-off points (and its vehicles to cut-off ones),
 drives its riflemen in their troop transport where that's quicker, and pulls
 badly hurt squads back to
 reinforce. It sends its helicopters with the attack, and lands them at its base
-to refit. Its Karnovs set infantry down out of sight of every enemy it has seen
+to refit. It drops a sensor probe on the point it's attacking when its
+sensors don't reach there, and calls strikes on what its sensors pick up as
+well as what it sees. Its Karnovs set infantry down out of sight of every enemy it has seen
 in the last minute, and well clear of any point you hold or have units in (the
 HUD shows it those counts, as it shows you); if the landing zone turns hot on
 the way, the Karnov goes somewhere else. Infantry don't go in on a point you hold
@@ -252,8 +273,12 @@ four of six (three of each: too few to tell the two apart). With them, on
 Normal your side won five of six, by 13 to 49 tickets, and Liao one by 20. With
 the APCs too, your side won all three, by 24 to 96: each side rode two to four
 times a match, nearly every ride ending with the soldiers getting out under fire
-short of the point, and in nine matches one APC was lost with a squad aboard. A
-match can swing by 70 tickets, so a handful of matches shows a trend at best. `?scenario=none` shows the mission's
+short of the point, and in nine matches one APC was lost with a squad aboard.
+With sensors as well, Liao won two of three, by 29 and 49 tickets, and your side
+one by 8: each side dropped two or three probes a match and built one or two
+towers, and about half the strikes went in on enemies only sensors had picked
+up. A match can swing by 70 tickets, so a handful of matches shows a trend at
+best. `?scenario=none` shows the mission's
 own units instead (your lance is then its three mechs plus an Atlas and a
 Madcat), and `?speed=4` runs the world four times as fast (for testing).
 

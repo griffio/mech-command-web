@@ -38,7 +38,14 @@ export type ArmorLocation = MechLocation | 'RCT' | 'RLT' | 'RRT';
  * One component in a location, and what a critical hit to it destroys. A critical hit picks a component with odds by
  * its size in crit slots (mech.cpp calcCriticalHit).
  */
-export type SlotContent = ({ kind: 'engine' } | { kind: 'cockpit' } | { kind: 'weapon'; index: number } | { kind: 'ammo'; ammo: number } | { kind: 'other' }) & {
+export type SlotContent = (
+  | { kind: 'engine' }
+  | { kind: 'cockpit' }
+  | { kind: 'sensor' }
+  | { kind: 'weapon'; index: number }
+  | { kind: 'ammo'; ammo: number }
+  | { kind: 'other' }
+) & {
   size: number;
 };
 
@@ -52,6 +59,13 @@ export interface MechStats {
   torsoYawRate: number;
   /** It flies: MC2's helicopters are mechs that fly (see airMechs). */
   air: boolean;
+  /**
+   * How far its sensors pick up enemies without sight of them, metres: Extended 400, Advanced 550, Cyclops 800;
+   * Standard sensors reach 1 m, which is to say only what it sees.
+   */
+  sensorRange: number;
+  /** It carries an ECM suite: no enemy sensor picks it up (code/contact.cpp), only sight. */
+  ecm: boolean;
   armor: Record<ArmorLocation, number>;
   structure: Record<MechLocation, number>;
   weapons: { id: number; location: MechLocation }[];
@@ -86,6 +100,8 @@ const LOCATION_COLUMN: Record<ArmorLocation, number> = { HD: 2, LA: 3, RA: 4, LT
 const PLATING_SHARE: Record<ArmorLocation, number> = { HD: 0, CT: 0.17, LT: 0.125, RT: 0.125, LA: 0.12, RA: 0.12, LL: 0.13, RL: 0.13, RCT: 0.03, RLT: 0.02, RRT: 0.02 };
 const PLATING_ID = 25;
 const VARIANT_ROWS = 97;
+/** gamesys.fit BaseSensorRange: a sensor component's range is its damage column times this. */
+const BASE_SENSOR_RANGE = 1;
 /** Ids of the LRM racks the game treats as indirect-fire weapons (gamesys.fit IndirectFireWeaponComponentIndex). */
 const INDIRECT_FIRE = new Set([120, 123, 130, 160]);
 
@@ -94,6 +110,7 @@ export class ComponentTable {
   readonly ammo = new Map<number, AmmoDef>();
   private readonly types = new Map<number, string>();
   private readonly sizes = new Map<number, number>();
+  private readonly sensorRanges = new Map<number, number>();
 
   constructor(csv: string) {
     for (const row of parseCsv(csv).slice(1)) {
@@ -102,6 +119,7 @@ export class ComponentTable {
       const type = (row[1] ?? '').trim();
       this.types.set(id, type);
       this.sizes.set(id, num(row[3]));
+      this.sensorRanges.set(id, num(row[7]) * BASE_SENSOR_RANGE);
       const name = (row[2] ?? '').trim();
       if (type === 'Ammo') {
         this.ammo.set(id, { id, name, shotsPerPack: num(row[4]), explosive: num(row[7]) });
@@ -130,6 +148,14 @@ export class ComponentTable {
   /** Crit slots the component fills. */
   size(id: number): number {
     return this.sizes.get(id) ?? 0;
+  }
+
+  /**
+   * A sensor's reach, metres: its damage column times gamesys BaseSensorRange (1), mclib/cmponent.cpp; 0 for anything
+   * else.
+   */
+  sensorRange(id: number): number {
+    return this.types.get(id) === 'Sensors' ? (this.sensorRanges.get(id) ?? 0) : 0;
   }
 }
 
@@ -187,6 +213,7 @@ export function readMechStats(csv: string, components: ComponentTable, air = fal
         const size = components.size(id);
         if (type === 'Engine') return { kind: 'engine', size };
         if (type === 'Cockpit') return { kind: 'cockpit', size };
+        if (type === 'Sensors') return { kind: 'sensor', size };
         if (weaponIndexOfItem.has(item)) return { kind: 'weapon', index: weaponIndexOfItem.get(item)!, size };
         if (components.ammo.has(id)) return { kind: 'ammo', ammo: id, size };
         return { kind: 'other', size };
@@ -201,6 +228,8 @@ export function readMechStats(csv: string, components: ComponentTable, air = fal
     torsoYaw: num(cell(9, 5)),
     torsoYawRate: num(cell(8, 5)),
     air,
+    sensorRange: Math.max(0, ...items.map(({ id }) => components.sensorRange(id))),
+    ecm: items.some(({ id }) => components.type(id) === 'ECM'),
     armor,
     structure,
     weapons,
@@ -258,7 +287,10 @@ export function readVehicleStats(fit: Fit, components: ComponentTable): VehicleS
   };
 }
 
-/** An air or artillery strike (objects/artbig.fit, artsml.fit: [Artillery], code/artlry.cpp), in seconds and metres. */
+/**
+ * An air or artillery strike, or a sensor probe (objects/artbig.fit, artsml.fit, artsns.fit: [Artillery],
+ * code/artlry.cpp), in seconds and metres.
+ */
 export interface StrikeStats {
   /** Seconds from the call to the strike landing. */
   timeToImpact: number;
@@ -273,6 +305,9 @@ export interface StrikeStats {
   explosions: { delay: number; x: number; z: number }[];
   /** Up to this far further each way, at random. */
   scatter: number;
+  /** A sensor probe's reach, metres, which shrinks steadily to nothing over its time, seconds (0 for a strike). */
+  sensorRange: number;
+  sensorTime: number;
 }
 
 export function readStrike(fit: Fit): StrikeStats {
@@ -297,6 +332,8 @@ export function readStrike(fit: Fit): StrikeStats {
     minorHits: fit.num('Artillery', 'nominalMinorHits'),
     explosions,
     scatter: fit.num('Artillery', 'ExplosionRandomOffsetX', 0),
+    sensorRange: fit.num('Artillery', 'NominalSensorRange', 0),
+    sensorTime: fit.num('Artillery', 'NominalSensorTime', 0),
   };
 }
 

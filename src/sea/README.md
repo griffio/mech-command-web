@@ -49,9 +49,11 @@ New:
   `app/carriers.ts`: a rifle squad's APC fetching it, carrying it on long moves, and getting it out (under fire too).
   `app/suppression.ts`: fire landing near units suppresses them (worse aim) and pins soldiers down; its numbers.
   `app/support.ts`: artillery and air strikes called in on a spot: readiness, the marker and ring, the fighter's
-  bombing run, and the bursts (the damage is `Battle.bombard`, on MC2's rule).
+  bombing run, and the bursts (the damage is `Battle.bombard`, on MC2's rule); sensor probes are called the same way.
+  `app/sensors.ts`: what each side's sensors pick up beyond sight (mechs' sensor components, forward bases' towers,
+  probes), and the player's probe's ring.
   `app/logistics.ts`: supply trucks and the forward bases they build, supply, and the services bases give.
-  `app/match-hud.ts`: the ticket and point bar, the squad cards, and squad letters over the field.
+  `app/match-hud.ts`: the ticket and point bar, the squad cards, squad letters over the field, and sensor blips.
   `app/sound.ts`: MC2's radio, Betty and interface sounds through Web Audio, queued by MC2's radio rules.
   `app/callouts.ts`: what the squads and Betty say, and the notices, as orders are given and the match goes.
   `app/notice.ts`: the line under the top bar (refusals, alerts, what to tap next). `app/battle-sounds.ts`: weapons,

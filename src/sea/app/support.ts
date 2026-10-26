@@ -6,8 +6,11 @@
 // reach. When it lands its bursts spread over that ground, in the pattern its file gives (the engine reads it but draws
 // one effect instead).
 //
-// The rules for calling are this project's: a side calls a strike where one of its units can see, then waits a while
-// for the next. The player sees an enemy strike coming when it's near their units.
+// A sensor probe (MC2's artsns, its sensor strike) is called the same way, anywhere, and lands at once: it leaves a sensor
+// on the spot (sensors.ts) instead of doing damage.
+//
+// The rules for calling are this project's: a side calls a strike where one of its units can see, or its sensors reach,
+// then waits a while for the next. The player sees an enemy strike coming when it's near their units.
 import type { ScenarioStrike, ScenarioSupport, StrikeStats } from '../../assets';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
 import { SIGHT_RANGE } from '../sim/combat';
@@ -15,9 +18,9 @@ import type { Attacker } from './battle';
 import type { Match } from './match';
 import { PLAYER_TEAM, type SeaUnit, type World } from './world';
 
-export type CallIn = 'artillery' | 'airstrike';
-export const CALL_INS: CallIn[] = ['artillery', 'airstrike'];
-export const CALL_IN_NAMES: Record<CallIn, string> = { artillery: 'Artillery', airstrike: 'Air strike' };
+export type CallIn = 'artillery' | 'airstrike' | 'sensor';
+export const CALL_INS: CallIn[] = ['artillery', 'airstrike', 'sensor'];
+export const CALL_IN_NAMES: Record<CallIn, string> = { artillery: 'Artillery', airstrike: 'Air strike', sensor: 'Sensor probe' };
 
 /** Seconds out the engine plays the incoming whoosh, and starts the fighter's bombing run (code/artlry.cpp). */
 const WHOOSH_S = 5.5;
@@ -28,7 +31,7 @@ const BOMBER_REACH_M = 260;
 const MARKER_SIZE = 2.5;
 const MARKER_SPIN_DEG_S = 90;
 /** How big a burst looks (the air strike's bigger), and how much its spot wanders. */
-const BURST_SCALE: Record<CallIn, number> = { artillery: 1.1, airstrike: 1.5 };
+const BURST_SCALE: Record<CallIn, number> = { artillery: 1.1, airstrike: 1.5, sensor: 0 };
 /** The player sees an enemy strike coming when one of their units is within this of its reach, metres. */
 const WARN_M = 60;
 const RING_COLOR: Record<'own' | 'enemy', [number, number, number, number]> = { own: [1, 0.74, 0.3, 1], enemy: [1, 0.3, 0.25, 1] };
@@ -99,7 +102,9 @@ export class Support {
     if (!this.available(call)) return `there's no ${CALL_IN_NAMES[call].toLowerCase()} in this scenario`;
     const wait = this.readyIn(team, call);
     if (wait > 0) return `${CALL_IN_NAMES[call]} is ready in ${Math.ceil(wait)} s`;
-    if (!this.spotted(team, x, z)) return `none of your squads can see there: a strike needs someone watching the spot`;
+    if (call !== 'sensor' && !this.spotted(team, x, z) && !this.match.sensors.covers(team, x, z)) {
+      return `none of your squads can see there, and no sensor of yours reaches it: a strike needs someone watching the spot`;
+    }
     return null;
   }
 
@@ -110,6 +115,11 @@ export class Support {
     const stats = this.stats(call)!;
     this.readyAt.set(`${team}:${call}`, this.match.time + this.callSpec(call)!.cooldown);
     this.announced.delete(`${team}:${call}`);
+    if (call === 'sensor') {
+      this.match.sensors.probe(team, x, z, stats);
+      this.match.onSignal({ kind: 'strikeCalled', team, call, x, z, reach: stats.sensorRange, seen: team === PLAYER_TEAM });
+      return null;
+    }
     const strike: Strike = {
       team,
       call,

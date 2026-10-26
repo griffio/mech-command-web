@@ -475,6 +475,33 @@ body.match #help {
   display: none;
 }
 
+/* A sensor contact: an enemy the player's sensors pick up out of sight (where it is, not what). */
+.blip {
+  position: absolute;
+  left: -6px;
+  top: -6px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgb(255 90 74 / 85%);
+  border: 1px solid rgb(255 255 255 / 55%);
+  animation: blip 1.6s ease-out infinite;
+  will-change: transform;
+}
+
+.blip[hidden] {
+  display: none;
+}
+
+@keyframes blip {
+  from {
+    box-shadow: 0 0 0 0 rgb(255 90 74 / 70%);
+  }
+  to {
+    box-shadow: 0 0 0 12px rgb(255 90 74 / 0%);
+  }
+}
+
 /* A unit's job under its bar (the squad's letter is above it): what it's doing, and how far along it is. */
 .unit-job {
   position: absolute;

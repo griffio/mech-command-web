@@ -213,6 +213,18 @@ export class MechCombat extends Combatant {
     return this.alive ? (sum(this.armor) + sum(this.structure)) / this.maxTotal : 0;
   }
 
+  /**
+   * How far its sensors pick up enemies out of sight, metres: none once a critical hit has taken them out or their
+   * location is gone (code/contact.cpp: a disabled sensor sees nothing).
+   */
+  get sensorRange(): number {
+    if (!this.alive || this.stats.sensorRange <= 0) return 0;
+    for (const l of Object.keys(this.components) as MechLocation[]) {
+      if (this.components[l].some((c) => c.kind === 'sensor' && (c.hit || this.structure[l] <= 0))) return 0;
+    }
+    return this.stats.sensorRange;
+  }
+
   /** The location's armour and structure as a share of new (a destroyed location is 0). */
   locationIntegrity(l: MechLocation): number {
     const rear = REAR_ARMOR[l];

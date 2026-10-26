@@ -11,7 +11,7 @@
 // water; a squad with an APC rides it on long moves (carriers.ts). Infantry that stand still a while dig in
 // behind sandbags, and are much harder to hit. Fire pins soldiers down (suppression.ts): pinned, they don't count
 // toward taking a point. Supply trucks build forward bases where squads come back, reinforce and
-// refit nearer the front (logistics.ts).
+// refit nearer the front (logistics.ts). Sensors pick up the enemy beyond sight (sensors.ts).
 import type { Scenario, ScenarioSide } from '../../assets';
 import { PLAYER_PAINT, paintFromMission, type PaintScheme } from '../../paint.ts';
 import type { GpuModel, ModelInstance } from '../render/models/model-renderer';
@@ -20,6 +20,7 @@ import { Airlift } from './airlift';
 import type { Attacker } from './battle';
 import { Carriers } from './carriers';
 import { FOB_RADIUS, Logistics, type ServicePoint } from './logistics';
+import { Sensors } from './sensors';
 import { Squad } from './squads';
 import { CALL_INS, Support, type CallIn } from './support';
 import { PLAYER_TEAM, bearing, type SeaUnit, type World } from './world';
@@ -61,7 +62,7 @@ const INFANTRY_LEAD_M = 100;
 /** Bodies are cleared after this; wrecks after the second. */
 const CLEAR_INFANTRY_S = 4;
 /** What the AI wants under a strike before it calls one (see CommanderAI.callStrikes). */
-const STRIKE_WORTH: Record<CallIn, number> = { artillery: 4, airstrike: 6 };
+const STRIKE_WORTH: Record<Exclude<CallIn, 'sensor'>, number> = { artillery: 4, airstrike: 6 };
 const CLEAR_WRECK_S = 150;
 
 /**
@@ -102,7 +103,9 @@ export type MatchSignal =
   | { kind: 'outOfSupply'; team: number; squad: Squad | null }
   /** A side can call a strike again; a side has called one (`seen` by the player: theirs, or near their units). */
   | { kind: 'strikeReady'; team: number; call: CallIn }
-  | { kind: 'strikeCalled'; team: number; call: CallIn; x: number; z: number; reach: number; seen: boolean };
+  | { kind: 'strikeCalled'; team: number; call: CallIn; x: number; z: number; reach: number; seen: boolean }
+  /** A side's sensor towers have picked up the enemy after a quiet while; a side's sensor tower was destroyed. */
+  | { kind: 'towerContact' | 'towerLost'; team: number };
 
 export interface Side {
   team: number;
@@ -128,6 +131,8 @@ export class Match {
   readonly airlift: Airlift;
   /** Squads' APCs. */
   readonly carriers: Carriers;
+  /** Each side's sensors and what they pick up. */
+  readonly sensors: Sensors;
   /** Supply trucks and forward bases, when the scenario has them. */
   logistics: Logistics | null = null;
   /** Strikes the sides call in, when the scenario has them. */
@@ -150,6 +155,7 @@ export class Match {
     this.airlift = new Airlift(world, scenario.transport ? world.propPath(scenario.transport) : null);
     this.carriers = new Carriers(world);
     this.carriers.onEvent = (text, team) => this.onEvent(text, team);
+    this.sensors = new Sensors(world, this);
     this.sides = scenario.sides.map((s) => ({
       team: s.team,
       name: s.name,
@@ -185,6 +191,7 @@ export class Match {
       match.support = new Support(world, match, scenario.support);
       await match.support.load();
     }
+    await match.sensors.load(scenario.support?.marker ?? null);
     for (const p of match.points) {
       match.pointRings.push(world.addMarker(match.ringModels.get(`${match.pointRings.length}:none`)!, p.x, p.z, 1));
       match.pointFlags.push(null);
@@ -242,6 +249,7 @@ export class Match {
     this.carriers.update(dt);
     this.logistics?.update(dt);
     this.support?.update(dt);
+    this.sensors.update(dt);
     this.capture(dt);
     this.garrison(dt);
     this.supply(dt);
@@ -529,7 +537,7 @@ function ticketCost(u: SeaUnit): number {
  * fire-support squads stand off behind the attack, and squads that have lost most of their strength fall back to
  * the base to reinforce and refit. Infantry are flown in short of the enemy, out of its sight, and go in on a point the
  * enemy is at with the mechs and vehicles, not ahead of them; so do its helicopters, which would otherwise get there
- * first.
+ * first. It drops a sensor probe on the point it's attacking when its sensors don't reach there.
  */
 export class CommanderAI {
   private nextThink = 0;
@@ -555,6 +563,7 @@ export class CommanderAI {
     const ready = side.squads.filter((q) => q.alive.length && q.respawnAt === null);
     for (const q of ready.filter((q) => q.isLogistics)) this.supplyRun(q);
     this.callStrikes();
+    this.probe();
     const squads = ready.filter((q) => !q.isLogistics);
     const threats = this.threats();
     const attackers = Math.ceil(squads.length * 0.65);
@@ -607,7 +616,8 @@ export class CommanderAI {
   }
 
   /**
-   * Call in what strikes are ready, each on the enemies it sees bunched up most (worth a mech 3, a vehicle or a turret 2,
+   * Call in what strikes are ready, each on the enemies it knows of (sees, or its sensors pick up) bunched up most
+   * (worth a mech 3, a vehicle or a turret 2,
    * a soldier 1, those within the strike's minor range half), when they're worth enough and none of its own are
    * within its reach.
    */
@@ -616,8 +626,8 @@ export class CommanderAI {
     if (!S) return;
     for (const call of CALL_INS) {
       const stats = S.stats(call);
-      if (!stats || S.readyIn(this.team, call) > 0) continue;
-      const seen = [...this.world.battle.seenBy(this.team)].filter((u) => u.alive && !u.embarked);
+      if (call === 'sensor' || !stats || S.readyIn(this.team, call) > 0) continue;
+      const seen = this.known().filter((u) => u.alive && !u.embarked);
       const own = this.world.units.filter((u) => u.team === this.team && u.alive && u.combat && !u.embarked);
       // Helicopters in the air are out of a strike's reach.
       const worth = (u: SeaUnit) => (u.flies && u.flight !== 'parked' ? 0 : u.kind === 'mech' ? 3 : u.kind === 'infantry' ? 1 : 2);
@@ -639,10 +649,28 @@ export class CommanderAI {
     }
   }
 
-  /** Note where it sees enemies, and forget those dead or not seen for a while. */
+  /**
+   * A sensor probe, when it has one, on the point it's attacking (or else the one it holds at the front) if its sensors
+   * don't reach that already.
+   */
+  private probe(): void {
+    const S = this.match.support;
+    if (!S?.available('sensor') || S.readyIn(this.team, 'sensor') > 0) return;
+    for (const k of [this.match.capturable(this.team), this.match.frontier(this.team)]) {
+      const p = k === null ? null : this.match.points[k]!;
+      if (p && !this.match.sensors.covers(this.team, p.x, p.z)) return void S.call(this.team, 'sensor', p.x, p.z);
+    }
+  }
+
+  /** The enemies it knows of now: those its side sees, and those its sensors pick up. */
+  private known(): SeaUnit[] {
+    return [...new Set([...this.world.battle.seenBy(this.team), ...this.match.sensors.sensed(this.team)])];
+  }
+
+  /** Note where it sees (or its sensors pick up) enemies, and forget those dead or not heard of for a while. */
   private watch(): void {
     const now = this.match.time;
-    for (const u of this.world.battle.seenBy(this.team)) if (u.alive && u.combat?.weapons.length) this.sightings.set(u, { x: u.x, z: u.z, at: now });
+    for (const u of this.known()) if (u.alive && u.combat?.weapons.length) this.sightings.set(u, { x: u.x, z: u.z, at: now });
     for (const [u, s] of this.sightings) if (!u.alive || now - s.at > INTEL_S) this.sightings.delete(u);
   }
 

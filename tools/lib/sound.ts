@@ -52,6 +52,12 @@ export const BETTY = {
   supplyGone: 51,
   /** BETTY_ARTILLERY_AVAILABLE: a strike can be called in. */
   strikeReady: 22,
+  /** BETTY_SENSOR_PROBE_AVAIL */
+  probeReady: 23,
+  /** BETTY_SENS_TWR_CONTACT: a sensor tower has picked up the enemy (MC2 has the line but never plays it). */
+  towerContact: 34,
+  /** BETTY_SENS_TWR_DESTROYED (likewise). */
+  towerDestroyed: 35,
 } as const;
 export type BettyLine = keyof typeof BETTY;
 

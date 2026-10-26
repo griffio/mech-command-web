@@ -144,15 +144,29 @@ export class Callouts {
       case 'strikeReady':
         if (!own) return;
         this.notice.show(`${CALL_IN_NAMES[s.call]} ready`);
-        return this.sound?.announce('strikeReady');
+        return this.sound?.announce(s.call === 'sensor' ? 'probeReady' : 'strikeReady');
       case 'strikeCalled':
         return this.strikeCalled(s);
+      case 'towerContact':
+        if (!own) return;
+        this.notice.show('Sensor tower contact: the red blips are what it picks up');
+        return this.sound?.announce('towerContact');
+      case 'towerLost':
+        if (!own) return this.notice.show('Enemy sensor tower destroyed');
+        this.notice.show('Your sensor tower was destroyed', 'alert');
+        return this.sound?.announce('towerDestroyed');
     }
   }
 
   /** The player's strike on its way; or the enemy's, coming down near the player's units. */
   private strikeCalled(s: Extract<MatchSignal, { kind: 'strikeCalled' }>): void {
     const name = CALL_IN_NAMES[s.call];
+    if (s.call === 'sensor') {
+      // The enemy's probes go unseen.
+      if (s.team !== PLAYER_TEAM) return;
+      this.notice.show('Sensor probe down: red blips show what it picks up inside the ring, which shrinks as it fades');
+      return this.sound?.effect('place');
+    }
     if (s.team === PLAYER_TEAM) {
       this.notice.show(`${name} on the way: it hits everything inside the ring`);
       return this.sound?.effect('place');
@@ -188,9 +202,14 @@ export class Callouts {
     this.say(by.squad, unit.kind === 'mech' && !unit.flies ? 'mechDead' : unit.kind === 'structure' ? 'buildingDead' : 'vehicleDead');
   }
 
-  /** An enemy squad seen for the first time in a while: the squad of ours nearest it reports the contact. */
+  /**
+   * An enemy squad seen (or picked up by sensors) for the first time in a while: the squad of ours nearest it reports
+   * the contact.
+   */
   private contacts(t: number): void {
-    const seen = this.world.battle.seenBy(PLAYER_TEAM);
+    const sight = this.world.battle.seenBy(PLAYER_TEAM);
+    const sensed = this.match.sensors.sensed(PLAYER_TEAM);
+    const seen = { has: (u: SeaUnit) => sight.has(u) || sensed.has(u) };
     const own = this.match.side(PLAYER_TEAM).squads.filter((q) => q.alive.length);
     for (const side of this.match.sides) {
       if (side.team === PLAYER_TEAM) continue;

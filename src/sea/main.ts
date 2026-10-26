@@ -339,10 +339,10 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     if (p.cancelled || p.handled || Math.hypot(e.clientX - p.x, e.clientY - p.y) > SLOP_PX) return;
     const hit = pickAt(e.clientX, e.clientY);
     if (!hit) return;
-    // With Artillery or Air strike pressed, the tap (on the ground or a unit) is where the strike lands.
-    if (mode === 'artillery' || mode === 'airstrike') {
+    // With Artillery, Air strike or Sensor probe pressed, the tap (on the ground or a unit) is where it lands.
+    if (mode && (CALL_INS as string[]).includes(mode)) {
       const [x, z] = Array.isArray(hit) ? hit : [hit.x, hit.z];
-      const why = world.match?.support?.call(PLAYER_TEAM, mode, x, z);
+      const why = world.match?.support?.call(PLAYER_TEAM, mode as CallIn, x, z);
       if (why) callouts?.refused(why, null);
       return setMode(null);
     }
@@ -372,16 +372,18 @@ function mountOrders(canvas: HTMLCanvasElement, camera: Camera, world: World, no
     airlift.setAttribute('aria-pressed', String(mode === 'airlift'));
     build.setAttribute('aria-pressed', String(mode === 'build'));
     for (const [call, button] of strikeButtons) button.setAttribute('aria-pressed', String(mode === call));
-    const strike = mode === 'artillery' || mode === 'airstrike' ? world.match?.support?.stats(mode) : null;
+    const strike = mode && (CALL_INS as string[]).includes(mode) ? world.match?.support?.stats(mode as CallIn) : null;
     void world.match?.logistics?.showNoBuild(mode === 'build' ? PLAYER_TEAM : null);
     notice.hint(
       mode === 'airlift'
         ? `Tap where the Karnov should set ${names((q) => q.airliftable && !q.airborne)} down`
         : mode === 'build'
           ? `Tap where ${names((q) => q.isLogistics)} should build a forward base, outside the red rings`
-          : strike && mode
-            ? `Tap where the ${CALL_IN_NAMES[mode as CallIn].toLowerCase()} should land, where your squads can see: it hits everything within ${strike.minorRange} m, yours too`
-            : null,
+          : strike && mode === 'sensor'
+            ? `Tap where the sensor probe should land: it picks up the enemy within ${strike.sensorRange} m, a reach that shrinks to nothing over ${Math.round(strike.sensorTime / 60)} minutes`
+            : strike && mode
+              ? `Tap where the ${CALL_IN_NAMES[mode as CallIn].toLowerCase()} should land, where your squads can see or your sensors reach: it hits everything within ${strike.minorRange} m, yours too`
+              : null,
     );
   }
   airlift.addEventListener('click', () => {
