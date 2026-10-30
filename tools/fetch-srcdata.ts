@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { parseAse } from './lib/ase.ts';
-import { collectMissionModels, readMission } from './lib/mission.ts';
+import { collectMissionModels, dropPlacedTurrets, readMission } from './lib/mission.ts';
 import { RemoteZip } from './lib/remote-zip.ts';
 import { readScenarios, scenarioNeeds } from './lib/scenario.ts';
 import { missionTune, soundLists, soundSet } from './lib/sound.ts';
@@ -74,6 +74,7 @@ checkout(
 // 2. The pilots' profiles (their gunnery is the chance to hit), then model geometry and animation for everything the
 //    mission places.
 const missionData = readMission(tree, mission);
+dropPlacedTurrets(tree, missionData);
 checkout(
   'pilots',
   [...new Set(missionData.profiles.values())].map((p) => tree.actual(`missions/warriors/${p}.fit`)).filter((p): p is string => p !== null),

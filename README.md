@@ -39,6 +39,7 @@ render scale, mostly with both sides played by the AI.
 npm install
 npm run fetch-data       # sparse-clones only what mission mc2_01 needs (~46 MB) into vendor/
 npm run convert          # writes public/assets/: maps, models and sound (ffmpeg encodes the music)
+npm run fetch-data -- --mission mc2_m01 && npm run convert -- --mission mc2_m01   # the next map
 npm run dev:https        # https://localhost:5173, also on your LAN for an iPad
 ```
 
@@ -52,7 +53,13 @@ without it on the PATH the game simply has no music.
 
 Options (both scripts): `--mission mc2_05` picks another mission, and
 `--extra-mechs atlas,madcat` adds mechs the mission doesn't use (the defaults
-are the showcase mechs that patrol near the start).
+are the showcase mechs that patrol near the start). Each conversion adds its map
+to `public/assets/manifest.json` (the game opens the first and its **Map**
+button cycles through the rest) and merges its voices, weapons and tunes into
+the shared `sound/sound.json`. The three maps the game ships, each with a
+scenario in `scenarios/`, are mc2_01 (the campaign's first mission, the
+islands) and two of MC2's multiplayer maps, mc2_m01 (Wet Work) and mc2_m10
+(2 of 3); the Pages workflow builds all three.
 
 ### Upscaled textures
 
@@ -109,12 +116,16 @@ better pilots; Normal and Hard make the enemy's 5 and 10 points likelier to hit
 (a pilot's gunnery is their chance to hit). The game starts on Normal. Tap it
 to change it: it takes effect at once, on the units already fighting too, and
 is remembered.
-**Music** and **Sound** next to it turn each on or off.
+**Music** and **Sound** next to it turn each on or off, and **Map** opens the next
+converted map (`?map=<mission>` picks one by name).
 
 ### Advance and Secure
 
 The game plays a scenario (`scenarios/*.json`, chosen by map), modelled on the
-game *Squad*. You command squads in real time: two lances of mechs, a rifle
+game *Squad*. The three scenarios are the same match on three maps: the islands
+of mc2_01 (below), Wet Work (a 3 km island whose middle is a wadeable lake, the
+lane down its east side) and 2 of 3 (rivers with a few fords, the lane from the
+north down to two of its three walled bases). You command squads in real time: two lances of mechs, a rifle
 squad with its APC, a squad of Elementals (power armour), a pair of helicopters
 and a supply truck. The Liao garrison has two lances, an armour squad, LRM
 carriers, riflemen with a troop transport, Elementals and helicopters, run by a
@@ -545,10 +556,12 @@ adapter's features. The report goes to the same `/api/perf` endpoint.
 
 Converted output per mission: `map.json` (terrain size, water, light, camera
 start), `elevation.bin` (Float32 heights), `colormap.webp`, `objects.json`
-(about 1,000 placed buildings and trees), `units.json` (mission units with their
+(about 1,000 placed buildings and trees on mc2_01; a mission's placed turrets
+are dropped, since the game places objects as scenery and a turret that never
+fires would only mislead), `units.json` (mission units with their
 pilots' gunnery, plus gesture speeds), `combat.json` (weapons, ammunition, and
 each unit type's armour, structure, loadout and crit slots), and `move.bin` (the
-300×300 movement grid). Shared by every mission: `sound/sound.json` (each radio
+movement grid: 300×300 cells on mc2_01, 360×360 on the 3 km maps). Shared by every mission: `sound/sound.json` (each radio
 message's priority and shelf life from `radio.csv`, the scenarios' voices' lines
 for each message, Betty's lines by their `BETTY_*` number, interface effects, each
 weapon's firing and impact sounds, the explosions, and the tunes), MC2's WAVs as
@@ -592,6 +605,10 @@ Checks done against mc2_01:
 - `alariq/mc2srcdata` lacks a few objects' models (some rocks, mech wreck pieces, nav
   markers). The converter skips any it can't find and lists them; mc2_01 and its
   scenario need none of them.
+- Walls and gates are scenery: a closed gate stays closed and a wall can't be
+  shot down, so a walled compound (2 of 3's bases) is entered only where the
+  movement map has a way in. On an all-land map such as 2 of 3 the sea lies
+  below the map's edge.
 - Vehicles drive, but their turrets don't turn: the converter flattens each
   vehicle into one node, though the files name a turret node (`sc_turret`). Prop
   animations (flags, radar) are not converted.

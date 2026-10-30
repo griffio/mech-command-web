@@ -1,0 +1,279 @@
+{
+  "name": "Advance and Secure: Wet Work",
+  "map": "mc2_m01",
+  "tickets": 150,
+  "pointRadius": 55,
+  "transport": "karnov",
+  "garrison": "sandbagbunker",
+  "support": {
+    "marker": "airstrikemarker",
+    "artillery": {
+      "strike": "artsml",
+      "first": 60,
+      "cooldown": 120
+    },
+    "airstrike": {
+      "strike": "artbig",
+      "bomber": "slayer",
+      "first": 150,
+      "cooldown": 240
+    },
+    "sensor": {
+      "strike": "artsns",
+      "first": 45,
+      "cooldown": 180
+    },
+    "vtol": "vtol",
+    "artilleryPiece": {
+      "unit": "guardtower",
+      "first": 180,
+      "cooldown": 300,
+      "gunnery": 40,
+      "voice": "pilota"
+    },
+    "scout": {
+      "unit": "scoutcopter",
+      "first": 30,
+      "cooldown": 150,
+      "gunnery": 35,
+      "voice": "pilotd"
+    },
+    "minelayer": {
+      "unit": "minelayer",
+      "first": 90,
+      "cooldown": 240,
+      "gunnery": 35,
+      "voice": "pilotb"
+    },
+    "repairVehicle": {
+      "unit": "repairtruck",
+      "first": 120,
+      "cooldown": 270,
+      "gunnery": 35,
+      "voice": "pilotc"
+    },
+    "recovery": {
+      "first": 240,
+      "cooldown": 360,
+      "gunnery": 40,
+      "voice": "pilot8"
+    }
+  },
+  "points": [
+    {
+      "name": "North compound",
+      "x": -120,
+      "z": -760
+    },
+    {
+      "name": "East heights",
+      "x": 450,
+      "z": -500
+    },
+    {
+      "name": "East compound",
+      "x": 560,
+      "z": 60
+    },
+    {
+      "name": "Lake foot",
+      "x": 150,
+      "z": 330
+    },
+    {
+      "name": "South compound",
+      "x": 170,
+      "z": 620
+    }
+  ],
+  "sides": [
+    {
+      "team": 0,
+      "name": "Your battalion",
+      "flag": "davionflag",
+      "wall": "davionlightwall",
+      "base": {
+        "x": 150,
+        "z": -980
+      },
+      "squads": [
+        {
+          "name": "Alpha",
+          "role": "Heavy lance",
+          "units": [
+            "atlas",
+            "madcat",
+            "catapult"
+          ],
+          "gunnery": 55,
+          "voice": "pilot5"
+        },
+        {
+          "name": "Bravo",
+          "role": "Strike lance",
+          "units": [
+            "werewolf",
+            "bushwacker",
+            "raven"
+          ],
+          "gunnery": 50,
+          "voice": "pilot7"
+        },
+        {
+          "name": "Charlie",
+          "role": "Rifle squad",
+          "units": [
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry"
+          ],
+          "gunnery": 45,
+          "voice": "pilot3",
+          "carrier": "apc1"
+        },
+        {
+          "name": "Delta",
+          "role": "Elementals",
+          "units": [
+            "poweredarmor",
+            "poweredarmor",
+            "poweredarmor",
+            "poweredarmor"
+          ],
+          "gunnery": 50,
+          "voice": "pilot11"
+        },
+        {
+          "name": "Echo",
+          "role": "Logistics",
+          "units": [
+            "repairtruck"
+          ],
+          "gunnery": 30,
+          "voice": "pilot1"
+        },
+        {
+          "name": "Foxtrot",
+          "role": "Air cavalry",
+          "units": [
+            "mediumcopter",
+            "heavycopter"
+          ],
+          "gunnery": 50,
+          "voice": "pilot9"
+        }
+      ]
+    },
+    {
+      "team": 1,
+      "name": "Liao garrison",
+      "flag": "liaoflag",
+      "wall": "liaolightwall",
+      "base": {
+        "x": -50,
+        "z": 1000
+      },
+      "colors": [
+        "#8a1f1a",
+        "#d8c8a0",
+        "#2a2a2a"
+      ],
+      "squads": [
+        {
+          "name": "Tiger",
+          "role": "Fire lance",
+          "units": [
+            "zeus",
+            "hunchback",
+            "starslayer"
+          ],
+          "gunnery": 42
+        },
+        {
+          "name": "Dragon",
+          "role": "Assault lance",
+          "units": [
+            "highlander",
+            "jaegermech",
+            "shadowcat"
+          ],
+          "gunnery": 42
+        },
+        {
+          "name": "Crane",
+          "role": "Armour",
+          "units": [
+            "centipede",
+            "centipede",
+            "harasser",
+            "harasser"
+          ],
+          "gunnery": 38
+        },
+        {
+          "name": "Viper",
+          "role": "Fire support",
+          "units": [
+            "lrmcarrier",
+            "lrmcarrier",
+            "lrmcarrier"
+          ],
+          "gunnery": 38
+        },
+        {
+          "name": "Mantis",
+          "role": "Rifle squad",
+          "units": [
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry",
+            "infantry"
+          ],
+          "gunnery": 38,
+          "carrier": "heavyapc"
+        },
+        {
+          "name": "Monkey",
+          "role": "Elementals",
+          "units": [
+            "poweredarmor",
+            "poweredarmor",
+            "poweredarmor",
+            "poweredarmor"
+          ],
+          "gunnery": 42
+        },
+        {
+          "name": "Ox",
+          "role": "Logistics",
+          "units": [
+            "repairtruck"
+          ],
+          "gunnery": 30
+        },
+        {
+          "name": "Phoenix",
+          "role": "Air wing",
+          "units": [
+            "mediumcopter",
+            "heavycopter"
+          ],
+          "gunnery": 42
+        }
+      ]
+    }
+  ],
+  "logistics": {
+    "truck": "repairtruck",
+    "hq": "hqtent",
+    "turret": "mediumautocannonturret",
+    "wall": "sandbagwall",
+    "tower": "liaosensortower",
+    "fobCost": 300
+  }
+}

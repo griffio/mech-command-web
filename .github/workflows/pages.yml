@@ -1,7 +1,7 @@
 # Builds the game and publishes it to GitHub Pages (Settings → Pages → Source: GitHub Actions).
 #
 # The MC2 data isn't in the repository (its art is licensed for non-commercial use only), so the build fetches and
-# converts it the way a local checkout does: the mission's files from alariq/mc2srcdata, and the remaster's 4x
+# converts it the way a local checkout does: each map's files from alariq/mc2srcdata, and the remaster's 4x
 # upscaled textures, cached between runs.
 name: Deploy to GitHub Pages
 
@@ -23,6 +23,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # The maps the game ships, each with a scenario in scenarios/; the first is the one it opens.
+      MAPS: mc2_01 mc2_m01 mc2_m10
     steps:
       - uses: actions/checkout@v7
 
@@ -41,14 +44,14 @@ jobs:
           restore-keys: mc2-data-
 
       - name: Fetch MC2 source data
-        run: npm run fetch-data -- --upscaled
+        run: for m in $MAPS; do npm run fetch-data -- --mission $m --upscaled; done
 
       # The converter encodes MC2's music to AAC with ffmpeg.
       - name: Install ffmpeg
         run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg)
 
-      - name: Convert the mission
-        run: npm run convert -- --upscaled
+      - name: Convert the maps
+        run: for m in $MAPS; do npm run convert -- --mission $m --upscaled; done
 
       - id: pages
         uses: actions/configure-pages@v6

@@ -328,3 +328,19 @@ export function collectMissionModels(
   }
   return { objectModels, partModels, specs, infos, extraModels, unresolved };
 }
+
+/**
+ * Drops the mission's placed turrets (ObjectClass.Turret) from its objects. The game places a map's objects as scenery,
+ * so a turret line would stand about never firing; the multiplayer maps have dozens. Returns how many went.
+ */
+export function dropPlacedTurrets(src: SourceData, mission: Mission): number {
+  const list = src.objectList();
+  const turret = new Map<number, boolean>();
+  const isTurret = (type: number) => {
+    if (!turret.has(type)) turret.set(type, readObjectInfo(src, list, type)?.cls === ObjectClass.Turret);
+    return turret.get(type)!;
+  };
+  const before = mission.objects.length;
+  mission.objects = mission.objects.filter((o) => !isTurret(o.type));
+  return before - mission.objects.length;
+}

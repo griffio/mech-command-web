@@ -15,7 +15,7 @@
 //   sound/sound.json               the squads' voices, Betty's lines, interface, weapon and explosion effects
 //                                  (sound/**/*.wav, as MC2's), and the tunes (sound/music/*.m4a, encoded with ffmpeg)
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import sharp from 'sharp';
@@ -27,13 +27,14 @@ import {
   WORLD_UNITS_PER_METER,
   WORLD_UNITS_PER_VERTEX,
   collectMissionModels,
+  dropPlacedTurrets,
   readMission,
   type ModelSpec,
 } from './lib/mission.ts';
 import { ComponentTable, mechProfiles, readGunnery, readMechStats, readStrike, readTurretStats, readVehicleStats, type MechStats, type VehicleStats } from './lib/combat-data.ts';
 import { buildModel, TextureLibrary } from './lib/model.ts';
 import { readScenarios, scenarioNeeds } from './lib/scenario.ts';
-import { missionTune, soundSet } from './lib/sound.ts';
+import { missionTune, soundSet, type SoundFile } from './lib/sound.ts';
 import { SourceData } from './lib/srcdata.ts';
 import { decodeTga } from './lib/tga.ts';
 
@@ -74,10 +75,13 @@ if (!src.has(`missions/${missionName}.fit`)) {
 }
 
 const mission = readMission(src, missionName);
+const turretsDropped = dropPlacedTurrets(src, mission);
 const fit = mission.fit;
 const mapDir = `maps/${missionName}`;
 const { side, elevation } = mission.terrain;
-console.log(`${missionName}: ${side}x${side} terrain, ${mission.objects.length} objects, ${mission.parts.length} units`);
+console.log(
+  `${missionName}: ${side}x${side} terrain, ${mission.objects.length} objects${turretsDropped ? ` (${turretsDropped} placed turrets dropped)` : ''}, ${mission.parts.length} units`,
+);
 
 // --- Terrain -----------------------------------------------------------------
 
@@ -297,7 +301,10 @@ json(`${mapDir}/combat.json`, {
   vehicles: vehicleStats,
   strikes: Object.fromEntries(needs.strikes.filter((s) => src.has(`objects/${s}.fit`)).map((s) => [s, readStrike(src.fit(`objects/${s}.fit`))])),
 });
-json('manifest.json', { maps: [missionName] });
+// The maps converted so far, in the order they were (the game opens the first).
+const manifestPath = join(out, 'manifest.json');
+const known = existsSync(manifestPath) ? ((JSON.parse(readFileSync(manifestPath, 'utf8')) as { maps?: string[] }).maps ?? []) : [];
+json('manifest.json', { maps: known.includes(missionName) ? known : [...known, missionName] });
 
 // --- Sound -----------------------------------------------------------------------
 // MC2's WAVs as they are (mono PCM, 11 or 22 kHz: a second or two each), which every browser decodes.
@@ -331,7 +338,19 @@ if (!ffmpeg) {
     musicBytes += statSync(target).size;
   }
 }
-json('sound/sound.json', sounds.manifest);
+// sound.json is shared by every map: what earlier conversions shipped for their missions and voices stays listed.
+const soundPath = join(out, 'sound', 'sound.json');
+const earlier = existsSync(soundPath) ? (JSON.parse(readFileSync(soundPath, 'utf8')) as SoundFile) : null;
+const manifest = sounds.manifest;
+if (earlier) {
+  manifest.voices = { ...earlier.voices, ...manifest.voices };
+  manifest.weapons = { ...earlier.weapons, ...manifest.weapons };
+  if (manifest.music && earlier.music) {
+    manifest.music.tracks = { ...earlier.music.tracks, ...manifest.music.tracks };
+    manifest.music.mission = { ...earlier.music.mission, ...manifest.music.mission };
+  }
+}
+json('sound/sound.json', manifest);
 
 console.log(
   `${models.specs.size} models (${(totalBytes / 1024 / 1024).toFixed(1)} MB), ${placed.length}/${mission.objects.length} objects placed, ${units.length}/${mission.parts.length} units`,

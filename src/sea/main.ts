@@ -72,6 +72,7 @@ async function main() {
     return;
   }
   const mapName = q.get('map') ?? manifest.maps[0]!;
+  mountMapPicker(manifest.maps, mapName);
   const dir = `maps/${mapName}/`;
   setStatus(`Loading ${mapName}…`);
   const info = await loadJson<MapInfo>(dir + 'map.json');
@@ -607,6 +608,24 @@ function mountCapture(
       capture.active = false;
       button.disabled = false;
     }
+  });
+}
+
+/** The map (top right), when more than one is converted: each press opens the next, by the page's `map` query. */
+function mountMapPicker(maps: string[], current: string): void {
+  if (maps.length < 2) return;
+  // A scenario's name is "<mode>: <map>" (scenarios/*.json): the map's part labels the button.
+  const label = (map: string) => SCENARIOS.find((s) => s.map === map)?.name.split(': ').pop() ?? map;
+  const button = document.getElementById('map-pick') as HTMLButtonElement;
+  button.textContent = `Map: ${label(current)}`;
+  button.setAttribute('aria-label', `Map: ${label(current)}; press for the next`);
+  button.hidden = false;
+  document.getElementById('top-buttons')!.hidden = false;
+  button.addEventListener('click', () => {
+    const next = maps[(Math.max(0, maps.indexOf(current)) + 1) % maps.length]!;
+    const url = new URL(location.href);
+    url.searchParams.set('map', next);
+    location.href = url.toString();
   });
 }
 
